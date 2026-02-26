@@ -1,0 +1,15 @@
+{
+  "name": "figma-design-qa-plugin",
+  "version": "1.0.0",
+  "description": "Design QA plugin for Figma - Compare screenshots with design guides",
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "lint": "eslint src/"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.98.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    /* ===== CSS Variables / Theme ===== */
+    :root {
+      --bg-primary: #ffffff;
+      --bg-secondary: #f5f5f5;
+      --bg-tertiary: #e8e8e8;
+      --bg-card: #ffffff;
+      --text-primary: #333333;
+      --text-secondary: #666666;
+      --text-muted: #999999;
+      --border-color: #e0e0e0;
+      --accent: #0d99ff;
+      --accent-hover: #0b85e0;
+      --success: #14ae5c;
+      --warning: #f2a20d;
+      --error: #f24822;
+      --severity-critical: #f24822;
+      --severity-major: #f2a20d;
+      --severity-minor: #0d99ff;
+      --severity-info: #999999;
+      --shadow: 0 1px 3px rgba(0,0,0,0.08);
+      --radius: 8px;
+      --radius-sm: 4px;
+    }
+
+    [data-theme="dark"] {
+      --bg-primary: #1e1e1e;
+      --bg-secondary: #2d2d2d;
+      --bg-tertiary: #3d3d3d;
+      --bg-card: #2d2d2d;
+      --text-primary: #e0e0e0;
+      --text-secondary: #aaaaaa;
+      --text-muted: #777777;
+      --border-color: #444444;
+      --shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+
+    /* ===== Reset & Base ===== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      font-size: 12px;
+      color: var(--text-primary);
+      background: var(--bg-primary);
+      line-height: 1.5;
+      overflow-x: hidden;
+    }
+
+    /* ===== Header ===== */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      background: var(--bg-primary);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    /* ===== Theme Toggle ===== */
+    .theme-toggle {
+      display: flex;
+      background: var(--bg-secondary);
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+    }
+    .theme-btn {
+      padding: 4px 10px;
+      font-size: 11px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .theme-btn.active {
+      background: var(--accent);
+      color: white;
+    }
+
+    /* ===== Mode Tabs ===== */
+    .mode-tabs {
+      display: flex;
+      background: var(--bg-secondary);
+      border-radius: 6px;
+      padding: 2px;
+      border: 1px solid var(--border-color);
+    }
+    .mode-tab {
+      padding: 4px 10px;
+      font-size: 11px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .mode-tab.active {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-weight: 600;
+      box-shadow: var(--shadow);
+    }
+
+    /* ===== Selection Panel ===== */
+    .selection-panel {
+      padding: 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .selection-row {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .selection-box {
+      flex: 1;
+      border: 2px dashed var(--border-color);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s;
+      background: var(--bg-secondary);
+      position: relative;
+      min-height: 80px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .selection-box:hover {
+      border-color: var(--accent);
+      background: var(--bg-primary);
+    }
+    .selection-box.selected {
+      border-color: var(--accent);
+      border-style: solid;
+      background: var(--bg-primary);
+    }
+    .selection-box .icon {
+      font-size: 24px;
+      margin-bottom: 6px;
+      opacity: 0.5;
+    }
+    .selection-box.selected .icon { opacity: 1; }
+    .selection-box .label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .selection-box .name {
+      font-size: 12px;
+      color: var(--text-primary);
+      margin-top: 4px;
+      font-weight: 500;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Screenshot upload area */
+    .screenshot-upload {
+      flex: 1;
+      border: 2px dashed var(--border-color);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s;
+      background: var(--bg-secondary);
+      min-height: 80px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    .screenshot-upload:hover {
+      border-color: var(--accent);
+    }
+    .screenshot-upload.has-image {
+      border-color: var(--accent);
+      border-style: solid;
+    }
+    .screenshot-upload input[type="file"] {
+      display: none;
+    }
+    .screenshot-preview {
+      max-width: 100%;
+      max-height: 60px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+    }
+
+    /* ===== Compare Button ===== */
+    .compare-btn {
+      width: 100%;
+      padding: 10px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .compare-btn:hover { background: var(--accent-hover); }
+    .compare-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* ===== Check Filter Tabs ===== */
+    .check-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .check-tabs::-webkit-scrollbar { display: none; }
+    .check-tab {
+      padding: 5px 10px;
+      font-size: 11px;
+      border: 1px solid var(--border-color);
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: 20px;
+      transition: all 0.15s;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .check-tab.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    .check-tab .count {
+      background: rgba(0,0,0,0.15);
+      padding: 0 5px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .check-tab.active .count {
+      background: rgba(255,255,255,0.25);
+    }
+
+    /* ===== Results Area ===== */
+    .results-area {
+      padding: 12px 16px;
+      max-height: calc(100vh - 300px);
+      overflow-y: auto;
+    }
+
+    /* Summary Cards */
+    .summary-cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .summary-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      padding: 10px;
+      text-align: center;
+    }
+    .summary-card .value {
+      font-size: 20px;
+      font-weight: 700;
+    }
+    .summary-card .label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 2px;
+    }
+    .summary-card.pass .value { color: var(--success); }
+    .summary-card.fail .value { color: var(--error); }
+    .summary-card.warn .value { color: var(--warning); }
+
+    /* Issue Cards */
+    .issue-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+      overflow: hidden;
+      transition: all 0.15s;
+    }
+    .issue-card:hover {
+      box-shadow: var(--shadow);
+    }
+    .issue-header {
+      display: flex;
+      align-items: center;
+      padding: 10px 12px;
+      cursor: pointer;
+      gap: 8px;
+    }
+    .severity-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .severity-dot.critical { background: var(--severity-critical); }
+    .severity-dot.major { background: var(--severity-major); }
+    .severity-dot.minor { background: var(--severity-minor); }
+    .severity-dot.info { background: var(--severity-info); }
+    .issue-title {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+    .issue-category {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--bg-tertiary);
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+    .issue-toggle {
+      font-size: 10px;
+      color: var(--text-muted);
+      transition: transform 0.2s;
+    }
+    .issue-card.expanded .issue-toggle {
+      transform: rotate(180deg);
+    }
+    .issue-body {
+      display: none;
+      padding: 0 12px 12px;
+      border-top: 1px solid var(--border-color);
+    }
+    .issue-card.expanded .issue-body {
+      display: block;
+      padding-top: 10px;
+    }
+    .issue-detail {
+      margin-bottom: 8px;
+    }
+    .issue-detail-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+    .issue-detail-value {
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+
+    /* Color swatch comparison */
+    .color-compare {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .color-swatch {
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      border: 1px solid var(--border-color);
+      position: relative;
+    }
+    .color-arrow {
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+    .color-hex {
+      font-size: 11px;
+      font-family: 'SF Mono', monospace;
+      color: var(--text-secondary);
+    }
+
+    /* Typography comparison */
+    .typo-compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .typo-box {
+      background: var(--bg-secondary);
+      border-radius: var(--radius-sm);
+      padding: 8px;
+    }
+    .typo-box-label {
+      font-size: 9px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .typo-prop {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      padding: 2px 0;
+    }
+    .typo-prop .key { color: var(--text-secondary); }
+    .typo-prop .val { color: var(--text-primary); font-weight: 500; }
+    .typo-prop .val.diff { color: var(--error); }
+
+    /* Spacing visual */
+    .spacing-visual {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+      padding: 8px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-sm);
+    }
+    .spacing-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+    .spacing-rect {
+      width: 40px;
+      height: 24px;
+      border: 2px solid;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    .spacing-rect.expected { border-color: var(--success); color: var(--success); }
+    .spacing-rect.actual { border-color: var(--error); color: var(--error); }
+    .spacing-label {
+      font-size: 9px;
+      color: var(--text-muted);
+    }
+
+    /* ===== Empty / Loading States ===== */
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-muted);
+    }
+    .empty-state .icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
+    .empty-state .title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+    .empty-state .desc { font-size: 12px; }
+
+    .loading {
+      text-align: center;
+      padding: 40px 20px;
+    }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid var(--border-color);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ===== Accessibility Report ===== */
+    .a11y-section {
+      margin-top: 8px;
+    }
+    .a11y-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-sm);
+      margin-bottom: 4px;
+    }
+    .a11y-badge {
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .a11y-badge.pass { background: #e6f9ee; color: var(--success); }
+    .a11y-badge.fail { background: #fde8e4; color: var(--error); }
+    [data-theme="dark"] .a11y-badge.pass { background: #1a3d2a; }
+    [data-theme="dark"] .a11y-badge.fail { background: #3d1a14; }
+    .a11y-ratio {
+      font-family: 'SF Mono', monospace;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .a11y-level {
+      font-size: 10px;
+      color: var(--text-secondary);
+    }
+
+    /* ===== Export Button ===== */
+    .export-bar {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      gap: 8px;
+      background: var(--bg-primary);
+      position: sticky;
+      bottom: 0;
+    }
+    .export-btn {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius);
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .export-btn:hover {
+      background: var(--bg-tertiary);
+    }
+    .export-btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    .export-btn.primary:hover { background: var(--accent-hover); }
+
+    /* ===== Scrollbar ===== */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-color);
+      border-radius: 3px;
+    }
+
+    /* ===== Overlay Visual ===== */
+    .overlay-controls {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 16px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+    }
+    .overlay-slider {
+      flex: 1;
+      -webkit-appearance: none;
+      height: 4px;
+      border-radius: 2px;
+      background: var(--border-color);
+      outline: none;
+    }
+    .overlay-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    .overlay-label {
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    /* Hide sections based on view mode */
+    .view-hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <span class="header-title">Design QA Inspector</span>
+    <div class="header-actions">
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="light" onclick="setDesignMode('light')">Light</button>
+        <button class="mode-tab" data-mode="dark" onclick="setDesignMode('dark')">Dark</button>
+      </div>
+      <div class="theme-toggle">
+        <button class="theme-btn active" data-theme-val="light" onclick="setTheme('light')">&#9728;</button>
+        <button class="theme-btn" data-theme-val="dark" onclick="setTheme('dark')">&#9790;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Selection Panel -->
+  <div class="selection-panel">
+    <div class="selection-row">
+      <div class="selection-box" id="designFrame" onclick="selectDesignFrame()">
+        <div class="icon">&#9634;</div>
+        <div class="label">Design Guide</div>
+        <div class="name" id="designFrameName">Select a frame</div>
+      </div>
+      <div class="screenshot-upload" id="screenshotArea" onclick="document.getElementById('screenshotInput').click()">
+        <input type="file" id="screenshotInput" accept="image/*" onchange="handleScreenshot(event)">
+        <div class="icon" id="screenshotIcon">&#128247;</div>
+        <img id="screenshotPreview" class="screenshot-preview" style="display:none">
+        <div class="label">Screenshot</div>
+        <div class="name" id="screenshotName">Upload image</div>
+      </div>
+    </div>
+    <button class="compare-btn" id="compareBtn" onclick="runComparison()" disabled>
+      Run QA Comparison
+    </button>
+  </div>
+
+  <!-- Overlay Controls (hidden until comparison) -->
+  <div class="overlay-controls" id="overlayControls" style="display:none">
+    <span class="overlay-label">Overlay:</span>
+    <input type="range" class="overlay-slider" id="overlaySlider" min="0" max="100" value="50"
+           oninput="updateOverlay(this.value)">
+    <span class="overlay-label" id="overlayValue">50%</span>
+  </div>
+
+  <!-- Check Filter Tabs -->
+  <div class="check-tabs" id="checkTabs" style="display:none">
+    <button class="check-tab active" data-filter="all" onclick="filterChecks('all')">
+      All <span class="count" id="countAll">0</span>
+    </button>
+    <button class="check-tab" data-filter="color" onclick="filterChecks('color')">
+      Color <span class="count" id="countColor">0</span>
+    </button>
+    <button class="check-tab" data-filter="typography" onclick="filterChecks('typography')">
+      Typography <span class="count" id="countTypo">0</span>
+    </button>
+    <button class="check-tab" data-filter="spacing" onclick="filterChecks('spacing')">
+      Spacing <span class="count" id="countSpacing">0</span>
+    </button>
+    <button class="check-tab" data-filter="component" onclick="filterChecks('component')">
+      Component <span class="count" id="countComponent">0</span>
+    </button>
+    <button class="check-tab" data-filter="a11y" onclick="filterChecks('a11y')">
+      Accessibility <span class="count" id="countA11y">0</span>
+    </button>
+  </div>
+
+  <!-- Results Area -->
+  <div class="results-area" id="resultsArea">
+    <div class="empty-state" id="emptyState">
+      <div class="icon">&#128269;</div>
+      <div class="title">No comparison yet</div>
+      <div class="desc">Select a design frame and upload a screenshot to start QA inspection.</div>
+    </div>
+    <div class="loading" id="loadingState" style="display:none">
+      <div class="spinner"></div>
+      <div style="color:var(--text-secondary)">Analyzing design differences...</div>
+    </div>
+    <div id="summaryCards" style="display:none"></div>
+    <div id="issuesList"></div>
+  </div>
+
+  <!-- Export Bar -->
+  <div class="export-bar" id="exportBar" style="display:none">
+    <button class="export-btn" onclick="exportReport('json')">Export JSON</button>
+    <button class="export-btn" onclick="exportReport('csv')">Export CSV</button>
+    <button class="export-btn primary" onclick="exportReport('figma')">Create Annotations</button>
+  </div>
+
+  <script>
+    // ===== State =====
+    let state = {
+      designFrame: null,
+      screenshotData: null,
+      screenshotName: null,
+      designMode: 'light',  // light or dark mode being checked
+      uiTheme: 'light',
+      issues: [],
+      activeFilter: 'all',
+      isComparing: false,
+    };
+
+    // ===== Theme Management =====
+    function setTheme(theme) {
+      state.uiTheme = theme;
+      document.documentElement.setAttribute('data-theme', theme);
+      document.querySelectorAll('.theme-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.themeVal === theme);
+      });
+    }
+
+    function setDesignMode(mode) {
+      state.designMode = mode;
+      document.querySelectorAll('.mode-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.mode === mode);
+      });
+      // Notify plugin code about mode change
+      parent.postMessage({ pluginMessage: { type: 'set-design-mode', mode } }, '*');
+    }
+
+    // ===== Frame Selection =====
+    function selectDesignFrame() {
+      parent.postMessage({ pluginMessage: { type: 'select-design-frame' } }, '*');
+    }
+
+    // ===== Screenshot Upload =====
+    function handleScreenshot(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      state.screenshotName = file.name;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+          // Draw to canvas to get pixel data
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+          state.screenshotData = {
+            width: img.width,
+            height: img.height,
+            data: Array.from(imageData.data),
+          };
+
+          // Show preview
+          const preview = document.getElementById('screenshotPreview');
+          preview.src = e.target.result;
+          preview.style.display = 'block';
+          document.getElementById('screenshotIcon').style.display = 'none';
+          document.getElementById('screenshotName').textContent = file.name;
+          document.getElementById('screenshotArea').classList.add('has-image');
+
+          updateCompareButton();
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function updateCompareButton() {
+      const btn = document.getElementById('compareBtn');
+      btn.disabled = !(state.designFrame && state.screenshotData);
+    }
+
+    // ===== Run Comparison =====
+    function runComparison() {
+      if (!state.designFrame || !state.screenshotData) return;
+      state.isComparing = true;
+
+      // Show loading
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('loadingState').style.display = 'block';
+      document.getElementById('summaryCards').style.display = 'none';
+      document.getElementById('issuesList').innerHTML = '';
+      document.getElementById('checkTabs').style.display = 'none';
+      document.getElementById('exportBar').style.display = 'none';
+      document.getElementById('overlayControls').style.display = 'none';
+
+      parent.postMessage({
+        pluginMessage: {
+          type: 'run-comparison',
+          designMode: state.designMode,
+          screenshot: state.screenshotData,
+        }
+      }, '*');
+    }
+
+    // ===== Filter Issues =====
+    function filterChecks(filter) {
+      state.activeFilter = filter;
+      document.querySelectorAll('.check-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.filter === filter);
+      });
+      renderIssues();
+    }
+
+    // ===== Render Issues =====
+    function renderIssues() {
+      const list = document.getElementById('issuesList');
+      const filtered = state.activeFilter === 'all'
+        ? state.issues
+        : state.issues.filter(i => i.category === state.activeFilter);
+
+      if (filtered.length === 0) {
+        list.innerHTML = `
+          <div class="empty-state">
+            <div class="icon">&#10004;</div>
+            <div class="title">All checks passed!</div>
+            <div class="desc">No issues found for this category.</div>
+          </div>`;
+        return;
+      }
+
+      list.innerHTML = filtered.map((issue, idx) => `
+        <div class="issue-card" id="issue-${idx}" onclick="toggleIssue(${idx})">
+          <div class="issue-header">
+            <div class="severity-dot ${issue.severity}"></div>
+            <div class="issue-title">${issue.title}</div>
+            <div class="issue-category">${getCategoryLabel(issue.category)}</div>
+            <div class="issue-toggle">&#9660;</div>
+          </div>
+          <div class="issue-body">
+            ${renderIssueBody(issue)}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function getCategoryLabel(cat) {
+      const labels = {
+        color: 'Color',
+        typography: 'Typography',
+        spacing: 'Spacing',
+        component: 'Component',
+        a11y: 'Accessibility',
+      };
+      return labels[cat] || cat;
+    }
+
+    function renderIssueBody(issue) {
+      let html = '';
+
+      if (issue.description) {
+        html += `<div class="issue-detail">
+          <div class="issue-detail-label">Description</div>
+          <div class="issue-detail-value">${issue.description}</div>
+        </div>`;
+      }
+
+      if (issue.nodeName) {
+        html += `<div class="issue-detail">
+          <div class="issue-detail-label">Element</div>
+          <div class="issue-detail-value">${issue.nodeName}</div>
+        </div>`;
+      }
+
+      // Color comparison
+      if (issue.category === 'color' && issue.expected && issue.actual) {
+        html += `<div class="issue-detail">
+          <div class="issue-detail-label">Color Difference</div>
+          <div class="color-compare">
+            <div>
+              <div class="color-swatch" style="background:${issue.expected}"></div>
+              <div class="color-hex">${issue.expected}</div>
+            </div>
+            <div class="color-arrow">&#8594;</div>
+            <div>
+              <div class="color-swatch" style="background:${issue.actual}"></div>
+              <div class="color-hex">${issue.actual}</div>
+            </div>
+          </div>
+        </div>`;
+        if (issue.deltaE !== undefined) {
+          html += `<div class="issue-detail">
+            <div class="issue-detail-label">Delta E (Color Distance)</div>
+            <div class="issue-detail-value">${issue.deltaE.toFixed(2)}</div>
+          </div>`;
+        }
+      }
+
+      // Typography comparison
+      if (issue.category === 'typography' && issue.designTypo && issue.actualTypo) {
+        html += `<div class="issue-detail">
+          <div class="issue-detail-label">Typography Comparison</div>
+          <div class="typo-compare">
+            <div class="typo-box">
+              <div class="typo-box-label">Design</div>
+              ${renderTypoProps(issue.designTypo)}
+            </div>
+            <div class="typo-box">
+              <div class="typo-box-label">Actual</div>
+              ${renderTypoProps(issue.actualTypo, issue.designTypo)}
+            </div>
+          </div>
+        </div>`;
+      }
+
+      // Spacing visual
+      if (issue.category === 'spacing' && issue.expectedValue !== undefined) {
+        html += `<div class="issue-detail">
+          <div class="issue-detail-label">Spacing Difference</div>
+          <div class="spacing-visual">
+            <div class="spacing-box">
+              <div class="spacing-rect expected">${issue.expectedValue}px</div>
+              <div class="spacing-label">Expected</div>
+            </div>
+            <div class="color-arrow">&#8594;</div>
+            <div class="spacing-box">
+              <div class="spacing-rect actual">${issue.actualValue}px</div>
+              <div class="spacing-label">Actual</div>
+            </div>
+            <div style="font-size:11px;color:var(--text-secondary)">
+              Diff: ${Math.abs(issue.expectedValue - issue.actualValue)}px
+            </div>
+          </div>
+        </div>`;
+      }
+
+      // Accessibility
+      if (issue.category === 'a11y') {
+        if (issue.contrastRatio !== undefined) {
+          const passAA = issue.contrastRatio >= 4.5;
+          const passAAA = issue.contrastRatio >= 7;
+          html += `<div class="issue-detail">
+            <div class="issue-detail-label">Contrast Check</div>
+            <div class="a11y-section">
+              <div class="a11y-item">
+                <span class="a11y-ratio">${issue.contrastRatio.toFixed(2)}:1</span>
+                <span class="a11y-badge ${passAA ? 'pass' : 'fail'}">${passAA ? 'PASS' : 'FAIL'} AA</span>
+                <span class="a11y-badge ${passAAA ? 'pass' : 'fail'}">${passAAA ? 'PASS' : 'FAIL'} AAA</span>
+                ${issue.foreground ? `<span style="font-size:10px;color:var(--text-muted)">${issue.foreground} on ${issue.background}</span>` : ''}
+              </div>
+            </div>
+          </div>`;
+        }
+        if (issue.wcagCriteria) {
+          html += `<div class="issue-detail">
+            <div class="issue-detail-label">WCAG Criteria</div>
+            <div class="issue-detail-value">${issue.wcagCriteria}</div>
+          </div>`;
+        }
+      }
+
+      // Component
+      if (issue.category === 'component' && issue.componentName) {
+        html += `<div class="issue-detail">
+          <div class="issue-detail-label">Component</div>
+          <div class="issue-detail-value">${issue.componentName}</div>
+        </div>`;
+        if (issue.differences) {
+          html += `<div class="issue-detail">
+            <div class="issue-detail-label">Differences</div>
+            <div class="issue-detail-value">${issue.differences.join(', ')}</div>
+          </div>`;
+        }
+      }
+
+      if (issue.suggestion) {
+        html += `<div class="issue-detail">
+          <div class="issue-detail-label">Suggestion</div>
+          <div class="issue-detail-value" style="color:var(--accent)">${issue.suggestion}</div>
+        </div>`;
+      }
+
+      return html;
+    }
+
+    function renderTypoProps(typo, compareWith) {
+      const props = ['fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing'];
+      const labels = {
+        fontFamily: 'Font',
+        fontSize: 'Size',
+        fontWeight: 'Weight',
+        lineHeight: 'Line H.',
+        letterSpacing: 'Spacing'
+      };
+      return props.map(p => {
+        const isDiff = compareWith && typo[p] !== compareWith[p];
+        return `<div class="typo-prop">
+          <span class="key">${labels[p]}</span>
+          <span class="val ${isDiff ? 'diff' : ''}">${typo[p] || '-'}</span>
+        </div>`;
+      }).join('');
+    }
+
+    function toggleIssue(idx) {
+      const card = document.getElementById(`issue-${idx}`);
+      card.classList.toggle('expanded');
+    }
+
+    // ===== Summary Rendering =====
+    function renderSummary(summary) {
+      const container = document.getElementById('summaryCards');
+      container.innerHTML = `
+        <div class="summary-cards">
+          <div class="summary-card ${summary.total === 0 ? 'pass' : 'fail'}">
+            <div class="value">${summary.total}</div>
+            <div class="label">Issues</div>
+          </div>
+          <div class="summary-card ${summary.critical > 0 ? 'fail' : 'pass'}">
+            <div class="value">${summary.critical}</div>
+            <div class="label">Critical</div>
+          </div>
+          <div class="summary-card ${summary.major > 0 ? 'warn' : 'pass'}">
+            <div class="value">${summary.major}</div>
+            <div class="label">Major</div>
+          </div>
+          <div class="summary-card pass">
+            <div class="value">${summary.passed}</div>
+            <div class="label">Passed</div>
+          </div>
+        </div>`;
+      container.style.display = 'block';
+    }
+
+    function updateCounts() {
+      const counts = { all: state.issues.length, color: 0, typography: 0, spacing: 0, component: 0, a11y: 0 };
+      state.issues.forEach(i => { if (counts[i.category] !== undefined) counts[i.category]++; });
+      document.getElementById('countAll').textContent = counts.all;
+      document.getElementById('countColor').textContent = counts.color;
+      document.getElementById('countTypo').textContent = counts.typography;
+      document.getElementById('countSpacing').textContent = counts.spacing;
+      document.getElementById('countComponent').textContent = counts.component;
+      document.getElementById('countA11y').textContent = counts.a11y;
+    }
+
+    // ===== Overlay =====
+    function updateOverlay(value) {
+      document.getElementById('overlayValue').textContent = value + '%';
+      parent.postMessage({
+        pluginMessage: { type: 'update-overlay', opacity: parseInt(value) / 100 }
+      }, '*');
+    }
+
+    // ===== Export =====
+    function exportReport(format) {
+      parent.postMessage({
+        pluginMessage: {
+          type: 'export-report',
+          format,
+          issues: state.issues,
+          designMode: state.designMode,
+        }
+      }, '*');
+    }
+
+    // ===== Message Handler =====
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+
+      switch (msg.type) {
+        case 'frame-selected':
+          state.designFrame = msg.frame;
+          document.getElementById('designFrameName').textContent = msg.frame.name;
+          document.getElementById('designFrame').classList.add('selected');
+          updateCompareButton();
+          break;
+
+        case 'comparison-results':
+          state.issues = msg.issues;
+          state.isComparing = false;
+          document.getElementById('loadingState').style.display = 'none';
+          document.getElementById('checkTabs').style.display = 'flex';
+          document.getElementById('exportBar').style.display = 'flex';
+          document.getElementById('overlayControls').style.display = 'flex';
+          renderSummary(msg.summary);
+          updateCounts();
+          renderIssues();
+          break;
+
+        case 'comparison-error':
+          state.isComparing = false;
+          document.getElementById('loadingState').style.display = 'none';
+          document.getElementById('issuesList').innerHTML = `
+            <div class="empty-state">
+              <div class="icon">&#9888;</div>
+              <div class="title">Comparison Failed</div>
+              <div class="desc">${msg.error}</div>
+            </div>`;
+          break;
+
+        case 'export-complete':
+          alert('Report exported successfully!');
+          break;
+      }
+    };
+  </script>
+</body>
+</html>
