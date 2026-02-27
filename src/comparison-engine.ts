@@ -212,7 +212,7 @@ async function traverseNode(
   if ('children' in node) {
     for (const child of (node as FrameNode).children) {
       if (child.visible !== false) {
-        await traverseNode(child, tokens, nodeRects, rootX, rootY);
+        await traverseNode(child, tokens);
       }
     }
   }

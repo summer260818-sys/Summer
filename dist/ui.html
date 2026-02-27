@@ -100,21 +100,32 @@
     .selection-box {
       flex: 1; border: 2px dashed var(--border-color); border-radius: var(--radius);
       padding: 16px; text-align: center; cursor: pointer; transition: all 0.15s;
-      background: var(--bg-secondary); min-height: 80px;
+      background: var(--bg-secondary); min-height: 80px; position: relative;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
     }
     .selection-box:hover { border-color: var(--accent); background: var(--bg-primary); }
-    .selection-box.selected { border-color: var(--accent); border-style: solid; background: var(--bg-primary); }
+    .selection-box.selected {
+      border-color: var(--success); border-style: solid; background: var(--bg-primary);
+    }
     .selection-box .icon { font-size: 24px; margin-bottom: 6px; opacity: 0.5; }
-    .selection-box.selected .icon { opacity: 1; }
+    .selection-box.selected .icon { opacity: 1; color: var(--success); }
     .selection-box .label {
       font-size: 11px; font-weight: 600; color: var(--text-secondary);
       text-transform: uppercase; letter-spacing: 0.5px;
     }
+    .selection-box.selected .label { color: var(--success); }
     .selection-box .name {
       font-size: 12px; color: var(--text-primary); margin-top: 4px; font-weight: 500;
       max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
+    .selection-box.selected .name { color: var(--success); font-weight: 600; }
+    .selection-box .check-icon {
+      display: none; position: absolute; top: 6px; right: 6px;
+      width: 18px; height: 18px; border-radius: 50%;
+      background: var(--success); color: white;
+      font-size: 11px; line-height: 18px; text-align: center;
+    }
+    .selection-box.selected .check-icon { display: block; }
 
     /* ===== Compare Button ===== */
     .compare-btn {
@@ -307,11 +318,13 @@
   <div class="selection-panel">
     <div class="selection-row">
       <div class="selection-box" id="designFrame" onclick="selectDesignFrame()">
+        <div class="check-icon">&#10003;</div>
         <div class="icon">&#9634;</div>
         <div class="label">Design</div>
         <div class="name" id="designFrameName">Select frame</div>
       </div>
       <div class="selection-box" id="implFrame" onclick="selectImplFrame()">
+        <div class="check-icon">&#10003;</div>
         <div class="icon">&#9635;</div>
         <div class="label">Implementation</div>
         <div class="name" id="implFrameName">Select frame</div>
