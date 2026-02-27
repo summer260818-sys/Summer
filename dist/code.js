@@ -694,7 +694,7 @@
         });
         return;
       }
-      const node = figma.getNodeById(selectedFrameId);
+      const node = await figma.getNodeByIdAsync(selectedFrameId);
       if (!node || node.type !== "FRAME" && node.type !== "COMPONENT" && node.type !== "GROUP") {
         figma.ui.postMessage({
           type: "comparison-error",
@@ -736,10 +736,10 @@
     }
   }
   var overlayNode = null;
-  function handleOverlayUpdate(opacity) {
+  async function handleOverlayUpdate(opacity) {
     if (!selectedFrameId)
       return;
-    const frame = figma.getNodeById(selectedFrameId);
+    const frame = await figma.getNodeByIdAsync(selectedFrameId);
     if (!frame || !("absoluteTransform" in frame))
       return;
     if (overlayNode) {
@@ -805,7 +805,7 @@
       figma.notify("No frame selected for annotations.", { error: true });
       return;
     }
-    const frame = figma.getNodeById(selectedFrameId);
+    const frame = await figma.getNodeByIdAsync(selectedFrameId);
     if (!frame || !("absoluteTransform" in frame))
       return;
     const parentFrame = frame;
@@ -893,7 +893,7 @@
     }
     annotationFrame.layoutSizingVertical = "HUG";
     for (const issue of issues.filter((i) => i.nodeId && (i.severity === "critical" || i.severity === "major"))) {
-      const targetNode = figma.getNodeById(issue.nodeId);
+      const targetNode = await figma.getNodeByIdAsync(issue.nodeId);
       if (targetNode && "absoluteTransform" in targetNode) {
         const marker = figma.createEllipse();
         marker.name = `QA: ${issue.severity} - ${issue.title}`;
