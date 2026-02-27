@@ -130,26 +130,11 @@
       spacing: [],
       components: []
     };
-    const nodeRects = [];
-    const rootX = "absoluteTransform" in node ? node.absoluteTransform[0][2] : 0;
-    const rootY = "absoluteTransform" in node ? node.absoluteTransform[1][2] : 0;
-    await traverseNode(node, tokens, nodeRects, rootX, rootY);
-    return { tokens, nodeRects };
+    await traverseNode(node, tokens);
+    return tokens;
   }
-  async function traverseNode(node, tokens, nodeRects, rootX, rootY) {
+  async function traverseNode(node, tokens) {
     var _a, _b, _c;
-    if ("absoluteTransform" in node && "width" in node) {
-      const absX = node.absoluteTransform[0][2];
-      const absY = node.absoluteTransform[1][2];
-      nodeRects.push({
-        nodeId: node.id,
-        nodeName: node.name,
-        x: absX - rootX,
-        y: absY - rootY,
-        width: node.width,
-        height: node.height
-      });
-    }
     if ("fills" in node && Array.isArray(node.fills)) {
       for (const fill of node.fills) {
         if (fill.type === "SOLID" && fill.visible !== false) {
@@ -216,21 +201,21 @@
       if (frame.itemSpacing !== void 0) {
         tokens.spacing.push({
           type: "gap",
-          value: frame.itemSpacing,
+          value: Math.round(frame.itemSpacing),
           direction: frame.layoutMode === "HORIZONTAL" ? "horizontal" : "vertical",
           nodeName: node.name,
           nodeId: node.id
         });
       }
       if (frame.paddingTop !== void 0) {
-        if (frame.paddingTop > 0)
-          tokens.spacing.push({ type: "padding", value: frame.paddingTop, direction: "top", nodeName: node.name, nodeId: node.id });
-        if (frame.paddingRight > 0)
-          tokens.spacing.push({ type: "padding", value: frame.paddingRight, direction: "right", nodeName: node.name, nodeId: node.id });
-        if (frame.paddingBottom > 0)
-          tokens.spacing.push({ type: "padding", value: frame.paddingBottom, direction: "bottom", nodeName: node.name, nodeId: node.id });
-        if (frame.paddingLeft > 0)
-          tokens.spacing.push({ type: "padding", value: frame.paddingLeft, direction: "left", nodeName: node.name, nodeId: node.id });
+        if (Math.round(frame.paddingTop) > 0)
+          tokens.spacing.push({ type: "padding", value: Math.round(frame.paddingTop), direction: "top", nodeName: node.name, nodeId: node.id });
+        if (Math.round(frame.paddingRight) > 0)
+          tokens.spacing.push({ type: "padding", value: Math.round(frame.paddingRight), direction: "right", nodeName: node.name, nodeId: node.id });
+        if (Math.round(frame.paddingBottom) > 0)
+          tokens.spacing.push({ type: "padding", value: Math.round(frame.paddingBottom), direction: "bottom", nodeName: node.name, nodeId: node.id });
+        if (Math.round(frame.paddingLeft) > 0)
+          tokens.spacing.push({ type: "padding", value: Math.round(frame.paddingLeft), direction: "left", nodeName: node.name, nodeId: node.id });
       }
     }
     if (node.type === "INSTANCE") {
@@ -409,13 +394,13 @@
       if (dt.fontFamily !== it.fontFamily) {
         diffs.push(`font: ${dt.fontFamily} \u2192 ${it.fontFamily}`);
       }
-      if (Math.abs(dt.fontSize - it.fontSize) > 0.5) {
+      if (Math.round(dt.fontSize) !== Math.round(it.fontSize)) {
         diffs.push(`size: ${dt.fontSize}px \u2192 ${it.fontSize}px`);
       }
       if (dt.fontWeight !== it.fontWeight) {
         diffs.push(`weight: ${dt.fontWeight} \u2192 ${it.fontWeight}`);
       }
-      if (dt.lineHeight !== null && it.lineHeight !== null && Math.abs(dt.lineHeight - it.lineHeight) > 0.5) {
+      if (dt.lineHeight !== null && it.lineHeight !== null && Math.abs(Math.round(dt.lineHeight) - Math.round(it.lineHeight)) >= 1) {
         diffs.push(`line-height: ${Math.round(dt.lineHeight)}px \u2192 ${Math.round(it.lineHeight)}px`);
       }
       if (diffs.length > 0) {
@@ -452,10 +437,11 @@
       const match = implSps.find((is_) => is_.type === ds.type && is_.direction === ds.direction);
       if (!match)
         continue;
-      if (Math.abs(ds.value - match.value) > 0.5) {
+      const diff = Math.abs(ds.value - match.value);
+      if (diff >= 1) {
         issues.push({
           category: "spacing",
-          severity: Math.abs(ds.value - match.value) > 4 ? "major" : "minor",
+          severity: diff > 4 ? "major" : "minor",
           title: `Spacing mismatch: "${ds.nodeName}" ${ds.direction} ${ds.type}`,
           description: `${ds.direction} ${ds.type}: design ${ds.value}px vs impl ${match.value}px`,
           nodeName: match.nodeName,
@@ -688,7 +674,14 @@
   var currentDesignMode = "light";
   var selectedDesignFrameId = null;
   var selectedImplFrameId = null;
+  var tempHighlightId = null;
   var VALID_TYPES = ["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "GROUP", "SECTION"];
+  var SEVERITY_COLORS = {
+    critical: { r: 0.95, g: 0.28, b: 0.13 },
+    major: { r: 0.95, g: 0.64, b: 0.05 },
+    minor: { r: 0.05, g: 0.6, b: 1 },
+    info: { r: 0.6, g: 0.6, b: 0.6 }
+  };
   figma.ui.onmessage = async (msg) => {
     switch (msg.type) {
       case "select-design-frame":
@@ -704,9 +697,16 @@
       case "run-comparison":
         await handleComparison();
         break;
-      case "highlight-node":
+      case "highlight-on-canvas":
         if (msg.nodeId)
-          await highlightNode(msg.nodeId);
+          await highlightOnCanvas(msg.nodeId, msg.severity || "info");
+        break;
+      case "clear-highlight":
+        await clearTempHighlight();
+        break;
+      case "mark-on-canvas":
+        if (msg.nodeId)
+          await markOnCanvas(msg.nodeId, msg.severity || "info", msg.title || "");
         break;
       case "export-report":
         if (msg.issues && msg.format)
@@ -758,6 +758,7 @@
         });
         return;
       }
+      await clearTempHighlight();
       const designNode = await figma.getNodeByIdAsync(selectedDesignFrameId);
       const implNode = await figma.getNodeByIdAsync(selectedImplFrameId);
       if (!designNode || !VALID_TYPES.includes(designNode.type)) {
@@ -768,20 +769,11 @@
         figma.ui.postMessage({ type: "comparison-error", error: "Implementation \uD504\uB808\uC784\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4." });
         return;
       }
-      const designResult = await extractDesignTokens(designNode);
-      const implResult = await extractDesignTokens(implNode);
-      let frameImageBase64 = "";
-      try {
-        const imageBytes = await implNode.exportAsync({
-          format: "PNG",
-          constraint: { type: "WIDTH", value: 600 }
-        });
-        frameImageBase64 = figma.base64Encode(imageBytes);
-      } catch (_e) {
-      }
+      const designTokens = await extractDesignTokens(designNode);
+      const implTokens = await extractDesignTokens(implNode);
       const { issues, summary } = runFrameComparison(
-        designResult.tokens,
-        implResult.tokens,
+        designTokens,
+        implTokens,
         currentDesignMode
       );
       const severityOrder = { critical: 0, major: 1, minor: 2, info: 3 };
@@ -789,11 +781,7 @@
       figma.ui.postMessage({
         type: "comparison-results",
         issues,
-        summary,
-        nodeRects: implResult.nodeRects,
-        frameImage: frameImageBase64,
-        frameWidth: "width" in implNode ? implNode.width : 0,
-        frameHeight: "height" in implNode ? implNode.height : 0
+        summary
       });
       const notifMsg = summary.critical > 0 ? `${summary.total}\uAC1C \uC774\uC288 (${summary.critical}\uAC1C \uC2EC\uAC01)` : summary.total > 0 ? `${summary.total}\uAC1C \uC774\uC288 \uBC1C\uACAC` : "\uBAA8\uB4E0 \uAC80\uC0AC \uD1B5\uACFC!";
       figma.notify(notifMsg, { timeout: 3e3, error: summary.critical > 0 });
@@ -803,11 +791,62 @@
       figma.notify("\uBE44\uAD50 \uC2E4\uD328: " + errorMessage, { error: true });
     }
   }
-  async function highlightNode(nodeId) {
+  async function highlightOnCanvas(nodeId, severity) {
+    await clearTempHighlight();
     const node = await figma.getNodeByIdAsync(nodeId);
-    if (node) {
-      figma.viewport.scrollAndZoomIntoView([node]);
+    if (!node || !("absoluteTransform" in node))
+      return;
+    const sceneNode = node;
+    const absX = sceneNode.absoluteTransform[0][2];
+    const absY = sceneNode.absoluteTransform[1][2];
+    const w = "width" in sceneNode ? sceneNode.width : 0;
+    const h = "height" in sceneNode ? sceneNode.height : 0;
+    const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info;
+    const rect = figma.createRectangle();
+    rect.name = "__QA_TEMP_HIGHLIGHT__";
+    rect.x = absX - 2;
+    rect.y = absY - 2;
+    rect.resize(w + 4, h + 4);
+    rect.fills = [{ type: "SOLID", color, opacity: 0.12 }];
+    rect.strokes = [{ type: "SOLID", color }];
+    rect.strokeWeight = 2;
+    rect.cornerRadius = 2;
+    tempHighlightId = rect.id;
+    figma.viewport.scrollAndZoomIntoView([sceneNode]);
+  }
+  async function clearTempHighlight() {
+    if (tempHighlightId) {
+      const node = await figma.getNodeByIdAsync(tempHighlightId);
+      if (node)
+        node.remove();
+      tempHighlightId = null;
     }
+  }
+  async function markOnCanvas(nodeId, severity, title) {
+    const node = await figma.getNodeByIdAsync(nodeId);
+    if (!node || !("absoluteTransform" in node)) {
+      figma.notify("\uB178\uB4DC\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", { error: true });
+      return;
+    }
+    const sceneNode = node;
+    const absX = sceneNode.absoluteTransform[0][2];
+    const absY = sceneNode.absoluteTransform[1][2];
+    const w = "width" in sceneNode ? sceneNode.width : 0;
+    const h = "height" in sceneNode ? sceneNode.height : 0;
+    const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info;
+    const rect = figma.createRectangle();
+    rect.name = `QA: [${severity.toUpperCase()}] ${title}`;
+    rect.x = absX - 3;
+    rect.y = absY - 3;
+    rect.resize(w + 6, h + 6);
+    rect.fills = [{ type: "SOLID", color, opacity: 0.08 }];
+    rect.strokes = [{ type: "SOLID", color }];
+    rect.strokeWeight = 2;
+    rect.dashPattern = [6, 3];
+    rect.cornerRadius = 3;
+    figma.viewport.scrollAndZoomIntoView([sceneNode]);
+    figma.notify(`Marked: ${title}`);
+    figma.ui.postMessage({ type: "mark-complete", nodeId });
   }
   function handleExport(format, issues) {
     switch (format) {
@@ -907,12 +946,6 @@
     sep.resize(320, 1);
     sep.fills = [{ type: "SOLID", color: { r: 0.88, g: 0.88, b: 0.88 } }];
     annotationFrame.appendChild(sep);
-    const severityColors = {
-      critical: { r: 0.95, g: 0.28, b: 0.13 },
-      major: { r: 0.95, g: 0.64, b: 0.05 },
-      minor: { r: 0.05, g: 0.6, b: 1 },
-      info: { r: 0.6, g: 0.6, b: 0.6 }
-    };
     for (const issue of issues.slice(0, 30)) {
       const issueFrame = figma.createFrame();
       issueFrame.name = `Issue: ${issue.title}`;
@@ -925,13 +958,13 @@
       issueFrame.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
       issueFrame.cornerRadius = 6;
       issueFrame.strokeWeight = 1;
-      issueFrame.strokes = [{ type: "SOLID", color: severityColors[issue.severity] || severityColors.info }];
+      issueFrame.strokes = [{ type: "SOLID", color: SEVERITY_COLORS[issue.severity] || SEVERITY_COLORS.info }];
       issueFrame.layoutSizingHorizontal = "FILL";
       const issueSeverity = figma.createText();
       issueSeverity.fontName = { family: "Inter", style: "Bold" };
       issueSeverity.characters = `[${issue.severity.toUpperCase()}] ${issue.category.toUpperCase()}`;
       issueSeverity.fontSize = 10;
-      issueSeverity.fills = [{ type: "SOLID", color: severityColors[issue.severity] || severityColors.info }];
+      issueSeverity.fills = [{ type: "SOLID", color: SEVERITY_COLORS[issue.severity] || SEVERITY_COLORS.info }];
       issueFrame.appendChild(issueSeverity);
       const issueTitle = figma.createText();
       issueTitle.fontName = { family: "Inter", style: "Medium" };
@@ -962,7 +995,7 @@
         marker.x = absX - 6;
         marker.y = absY - 6;
         marker.resize(12, 12);
-        marker.fills = [{ type: "SOLID", color: severityColors[issue.severity] }];
+        marker.fills = [{ type: "SOLID", color: SEVERITY_COLORS[issue.severity] }];
         marker.opacity = 0.8;
         marker.strokeWeight = 2;
         marker.strokes = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];

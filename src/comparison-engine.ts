@@ -87,59 +87,24 @@ export interface ComparisonSummary {
   passed: number;
 }
 
-export interface NodeRect {
-  nodeId: string;
-  nodeName: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface ExtractionResult {
-  tokens: DesignToken;
-  nodeRects: NodeRect[];
-}
-
 // ===== Design Token Extraction =====
 
-export async function extractDesignTokens(node: SceneNode): Promise<ExtractionResult> {
+export async function extractDesignTokens(node: SceneNode): Promise<DesignToken> {
   const tokens: DesignToken = {
     colors: [],
     typography: [],
     spacing: [],
     components: [],
   };
-  const nodeRects: NodeRect[] = [];
 
-  const rootX = 'absoluteTransform' in node ? (node as any).absoluteTransform[0][2] : 0;
-  const rootY = 'absoluteTransform' in node ? (node as any).absoluteTransform[1][2] : 0;
-
-  await traverseNode(node, tokens, nodeRects, rootX, rootY);
-  return { tokens, nodeRects };
+  await traverseNode(node, tokens);
+  return tokens;
 }
 
 async function traverseNode(
   node: SceneNode,
   tokens: DesignToken,
-  nodeRects: NodeRect[],
-  rootX: number,
-  rootY: number,
 ): Promise<void> {
-  // Collect position rect for highlighting
-  if ('absoluteTransform' in node && 'width' in node) {
-    const absX = (node as any).absoluteTransform[0][2];
-    const absY = (node as any).absoluteTransform[1][2];
-    nodeRects.push({
-      nodeId: node.id,
-      nodeName: node.name,
-      x: absX - rootX,
-      y: absY - rootY,
-      width: (node as any).width,
-      height: (node as any).height,
-    });
-  }
-
   // Extract colors from fills
   if ('fills' in node && Array.isArray(node.fills)) {
     for (const fill of node.fills as Paint[]) {
@@ -213,7 +178,7 @@ async function traverseNode(
     if (frame.itemSpacing !== undefined) {
       tokens.spacing.push({
         type: 'gap',
-        value: frame.itemSpacing,
+        value: Math.round(frame.itemSpacing),
         direction: frame.layoutMode === 'HORIZONTAL' ? 'horizontal' : 'vertical',
         nodeName: node.name,
         nodeId: node.id,
@@ -221,10 +186,10 @@ async function traverseNode(
     }
 
     if (frame.paddingTop !== undefined) {
-      if (frame.paddingTop > 0) tokens.spacing.push({ type: 'padding', value: frame.paddingTop, direction: 'top', nodeName: node.name, nodeId: node.id });
-      if (frame.paddingRight > 0) tokens.spacing.push({ type: 'padding', value: frame.paddingRight, direction: 'right', nodeName: node.name, nodeId: node.id });
-      if (frame.paddingBottom > 0) tokens.spacing.push({ type: 'padding', value: frame.paddingBottom, direction: 'bottom', nodeName: node.name, nodeId: node.id });
-      if (frame.paddingLeft > 0) tokens.spacing.push({ type: 'padding', value: frame.paddingLeft, direction: 'left', nodeName: node.name, nodeId: node.id });
+      if (Math.round(frame.paddingTop) > 0) tokens.spacing.push({ type: 'padding', value: Math.round(frame.paddingTop), direction: 'top', nodeName: node.name, nodeId: node.id });
+      if (Math.round(frame.paddingRight) > 0) tokens.spacing.push({ type: 'padding', value: Math.round(frame.paddingRight), direction: 'right', nodeName: node.name, nodeId: node.id });
+      if (Math.round(frame.paddingBottom) > 0) tokens.spacing.push({ type: 'padding', value: Math.round(frame.paddingBottom), direction: 'bottom', nodeName: node.name, nodeId: node.id });
+      if (Math.round(frame.paddingLeft) > 0) tokens.spacing.push({ type: 'padding', value: Math.round(frame.paddingLeft), direction: 'left', nodeName: node.name, nodeId: node.id });
     }
   }
 
@@ -434,13 +399,13 @@ function crossCompareTypography(designTypo: DesignTypography[], implTypo: Design
     if (dt.fontFamily !== it.fontFamily) {
       diffs.push(`font: ${dt.fontFamily} \u2192 ${it.fontFamily}`);
     }
-    if (Math.abs(dt.fontSize - it.fontSize) > 0.5) {
+    if (Math.round(dt.fontSize) !== Math.round(it.fontSize)) {
       diffs.push(`size: ${dt.fontSize}px \u2192 ${it.fontSize}px`);
     }
     if (dt.fontWeight !== it.fontWeight) {
       diffs.push(`weight: ${dt.fontWeight} \u2192 ${it.fontWeight}`);
     }
-    if (dt.lineHeight !== null && it.lineHeight !== null && Math.abs(dt.lineHeight - it.lineHeight) > 0.5) {
+    if (dt.lineHeight !== null && it.lineHeight !== null && Math.abs(Math.round(dt.lineHeight) - Math.round(it.lineHeight)) >= 1) {
       diffs.push(`line-height: ${Math.round(dt.lineHeight)}px \u2192 ${Math.round(it.lineHeight)}px`);
     }
 
@@ -483,10 +448,11 @@ function crossCompareSpacing(designSpacing: DesignSpacing[], implSpacing: Design
     const match = implSps.find(is_ => is_.type === ds.type && is_.direction === ds.direction);
     if (!match) continue;
 
-    if (Math.abs(ds.value - match.value) > 0.5) {
+    const diff = Math.abs(ds.value - match.value);
+    if (diff >= 1) {
       issues.push({
         category: 'spacing',
-        severity: Math.abs(ds.value - match.value) > 4 ? 'major' : 'minor',
+        severity: diff > 4 ? 'major' : 'minor',
         title: `Spacing mismatch: "${ds.nodeName}" ${ds.direction} ${ds.type}`,
         description: `${ds.direction} ${ds.type}: design ${ds.value}px vs impl ${match.value}px`,
         nodeName: match.nodeName,

@@ -1,8 +1,8 @@
 /**
  * Design QA Inspector - Figma Plugin Main Code
  *
- * Compares Figma design frames with implementation frames
- * to identify color, typography, spacing, component, and accessibility issues.
+ * Compares Figma design frames with implementation frames.
+ * Highlights issues directly on the Figma canvas.
  */
 
 import {
@@ -23,8 +23,16 @@ figma.showUI(__html__, {
 let currentDesignMode: 'light' | 'dark' = 'light';
 let selectedDesignFrameId: string | null = null;
 let selectedImplFrameId: string | null = null;
+let tempHighlightId: string | null = null;
 
 const VALID_TYPES = ['FRAME', 'COMPONENT', 'COMPONENT_SET', 'INSTANCE', 'GROUP', 'SECTION'];
+
+const SEVERITY_COLORS: Record<string, { r: number; g: number; b: number }> = {
+  critical: { r: 0.95, g: 0.28, b: 0.13 },
+  major: { r: 0.95, g: 0.64, b: 0.05 },
+  minor: { r: 0.05, g: 0.6, b: 1 },
+  info: { r: 0.6, g: 0.6, b: 0.6 },
+};
 
 // ===== Message Handler =====
 
@@ -34,6 +42,8 @@ figma.ui.onmessage = async (msg: {
   format?: string;
   issues?: QAIssue[];
   nodeId?: string;
+  severity?: string;
+  title?: string;
 }) => {
   switch (msg.type) {
     case 'select-design-frame':
@@ -48,8 +58,14 @@ figma.ui.onmessage = async (msg: {
     case 'run-comparison':
       await handleComparison();
       break;
-    case 'highlight-node':
-      if (msg.nodeId) await highlightNode(msg.nodeId);
+    case 'highlight-on-canvas':
+      if (msg.nodeId) await highlightOnCanvas(msg.nodeId, msg.severity || 'info');
+      break;
+    case 'clear-highlight':
+      await clearTempHighlight();
+      break;
+    case 'mark-on-canvas':
+      if (msg.nodeId) await markOnCanvas(msg.nodeId, msg.severity || 'info', msg.title || '');
       break;
     case 'export-report':
       if (msg.issues && msg.format) handleExport(msg.format, msg.issues);
@@ -113,6 +129,9 @@ async function handleComparison(): Promise<void> {
       return;
     }
 
+    // Clear any existing temp highlight
+    await clearTempHighlight();
+
     const designNode = await figma.getNodeByIdAsync(selectedDesignFrameId);
     const implNode = await figma.getNodeByIdAsync(selectedImplFrameId);
 
@@ -126,25 +145,13 @@ async function handleComparison(): Promise<void> {
     }
 
     // Extract tokens from both frames
-    const designResult = await extractDesignTokens(designNode);
-    const implResult = await extractDesignTokens(implNode);
-
-    // Export impl frame as image for preview
-    let frameImageBase64 = '';
-    try {
-      const imageBytes = await (implNode as any).exportAsync({
-        format: 'PNG',
-        constraint: { type: 'WIDTH', value: 600 },
-      });
-      frameImageBase64 = figma.base64Encode(imageBytes);
-    } catch (_e) {
-      // Export failed, continue without image
-    }
+    const designTokens = await extractDesignTokens(designNode);
+    const implTokens = await extractDesignTokens(implNode);
 
     // Run comparison
     const { issues, summary } = runFrameComparison(
-      designResult.tokens,
-      implResult.tokens,
+      designTokens,
+      implTokens,
       currentDesignMode
     );
 
@@ -156,10 +163,6 @@ async function handleComparison(): Promise<void> {
       type: 'comparison-results',
       issues,
       summary,
-      nodeRects: implResult.nodeRects,
-      frameImage: frameImageBase64,
-      frameWidth: ('width' in implNode) ? (implNode as any).width : 0,
-      frameHeight: ('height' in implNode) ? (implNode as any).height : 0,
     });
 
     const notifMsg = summary.critical > 0
@@ -177,13 +180,77 @@ async function handleComparison(): Promise<void> {
   }
 }
 
-// ===== Highlight Node =====
+// ===== Canvas Highlighting =====
 
-async function highlightNode(nodeId: string): Promise<void> {
+async function highlightOnCanvas(nodeId: string, severity: string): Promise<void> {
+  await clearTempHighlight();
+
   const node = await figma.getNodeByIdAsync(nodeId);
-  if (node) {
-    figma.viewport.scrollAndZoomIntoView([node as SceneNode]);
+  if (!node || !('absoluteTransform' in node)) return;
+
+  const sceneNode = node as SceneNode;
+  const absX = sceneNode.absoluteTransform[0][2];
+  const absY = sceneNode.absoluteTransform[1][2];
+  const w = ('width' in sceneNode) ? (sceneNode as any).width : 0;
+  const h = ('height' in sceneNode) ? (sceneNode as any).height : 0;
+
+  const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info;
+
+  const rect = figma.createRectangle();
+  rect.name = '__QA_TEMP_HIGHLIGHT__';
+  rect.x = absX - 2;
+  rect.y = absY - 2;
+  rect.resize(w + 4, h + 4);
+  rect.fills = [{ type: 'SOLID', color, opacity: 0.12 }];
+  rect.strokes = [{ type: 'SOLID', color }];
+  rect.strokeWeight = 2;
+  rect.cornerRadius = 2;
+
+  tempHighlightId = rect.id;
+
+  figma.viewport.scrollAndZoomIntoView([sceneNode]);
+}
+
+async function clearTempHighlight(): Promise<void> {
+  if (tempHighlightId) {
+    const node = await figma.getNodeByIdAsync(tempHighlightId);
+    if (node) node.remove();
+    tempHighlightId = null;
   }
+}
+
+// ===== Mark on Canvas (Persistent) =====
+
+async function markOnCanvas(nodeId: string, severity: string, title: string): Promise<void> {
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (!node || !('absoluteTransform' in node)) {
+    figma.notify('노드를 찾을 수 없습니다.', { error: true });
+    return;
+  }
+
+  const sceneNode = node as SceneNode;
+  const absX = sceneNode.absoluteTransform[0][2];
+  const absY = sceneNode.absoluteTransform[1][2];
+  const w = ('width' in sceneNode) ? (sceneNode as any).width : 0;
+  const h = ('height' in sceneNode) ? (sceneNode as any).height : 0;
+
+  const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info;
+
+  // Create marker rectangle
+  const rect = figma.createRectangle();
+  rect.name = `QA: [${severity.toUpperCase()}] ${title}`;
+  rect.x = absX - 3;
+  rect.y = absY - 3;
+  rect.resize(w + 6, h + 6);
+  rect.fills = [{ type: 'SOLID', color, opacity: 0.08 }];
+  rect.strokes = [{ type: 'SOLID', color }];
+  rect.strokeWeight = 2;
+  rect.dashPattern = [6, 3];
+  rect.cornerRadius = 3;
+
+  figma.viewport.scrollAndZoomIntoView([sceneNode]);
+  figma.notify(`Marked: ${title}`);
+  figma.ui.postMessage({ type: 'mark-complete', nodeId });
 }
 
 // ===== Export =====
@@ -292,13 +359,6 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
   sep.fills = [{ type: 'SOLID', color: { r: 0.88, g: 0.88, b: 0.88 } }];
   annotationFrame.appendChild(sep);
 
-  const severityColors: Record<string, { r: number; g: number; b: number }> = {
-    critical: { r: 0.95, g: 0.28, b: 0.13 },
-    major: { r: 0.95, g: 0.64, b: 0.05 },
-    minor: { r: 0.05, g: 0.6, b: 1 },
-    info: { r: 0.6, g: 0.6, b: 0.6 },
-  };
-
   for (const issue of issues.slice(0, 30)) {
     const issueFrame = figma.createFrame();
     issueFrame.name = `Issue: ${issue.title}`;
@@ -311,14 +371,14 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
     issueFrame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
     issueFrame.cornerRadius = 6;
     issueFrame.strokeWeight = 1;
-    issueFrame.strokes = [{ type: 'SOLID', color: severityColors[issue.severity] || severityColors.info }];
+    issueFrame.strokes = [{ type: 'SOLID', color: SEVERITY_COLORS[issue.severity] || SEVERITY_COLORS.info }];
     issueFrame.layoutSizingHorizontal = 'FILL';
 
     const issueSeverity = figma.createText();
     issueSeverity.fontName = { family: 'Inter', style: 'Bold' };
     issueSeverity.characters = `[${issue.severity.toUpperCase()}] ${issue.category.toUpperCase()}`;
     issueSeverity.fontSize = 10;
-    issueSeverity.fills = [{ type: 'SOLID', color: severityColors[issue.severity] || severityColors.info }];
+    issueSeverity.fills = [{ type: 'SOLID', color: SEVERITY_COLORS[issue.severity] || SEVERITY_COLORS.info }];
     issueFrame.appendChild(issueSeverity);
 
     const issueTitle = figma.createText();
@@ -354,7 +414,7 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
       marker.x = absX - 6;
       marker.y = absY - 6;
       marker.resize(12, 12);
-      marker.fills = [{ type: 'SOLID', color: severityColors[issue.severity] }];
+      marker.fills = [{ type: 'SOLID', color: SEVERITY_COLORS[issue.severity] }];
       marker.opacity = 0.8;
       marker.strokeWeight = 2;
       marker.strokes = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
