@@ -101,7 +101,7 @@ export interface ScreenshotData {
 
 // ===== Design Token Extraction =====
 
-export function extractDesignTokens(node: FrameNode | ComponentNode | GroupNode): DesignToken {
+export async function extractDesignTokens(node: SceneNode): Promise<DesignToken> {
   const tokens: DesignToken = {
     colors: [],
     typography: [],
@@ -109,11 +109,11 @@ export function extractDesignTokens(node: FrameNode | ComponentNode | GroupNode)
     components: [],
   };
 
-  traverseNode(node, tokens);
+  await traverseNode(node, tokens);
   return tokens;
 }
 
-function traverseNode(node: SceneNode, tokens: DesignToken): void {
+async function traverseNode(node: SceneNode, tokens: DesignToken): Promise<void> {
   // Extract colors from fills
   if ('fills' in node && Array.isArray(node.fills)) {
     for (const fill of node.fills as Paint[]) {
@@ -211,10 +211,11 @@ function traverseNode(node: SceneNode, tokens: DesignToken): void {
   // Extract component info
   if (node.type === 'INSTANCE') {
     const instance = node as InstanceNode;
+    const mainComp = await instance.getMainComponentAsync();
     tokens.components.push({
       name: node.name,
       nodeId: node.id,
-      mainComponentId: instance.mainComponent?.id ?? null,
+      mainComponentId: mainComp?.id ?? null,
       variantProperties: instance.variantProperties,
       width: node.width,
       height: node.height,
@@ -226,7 +227,7 @@ function traverseNode(node: SceneNode, tokens: DesignToken): void {
   if ('children' in node) {
     for (const child of (node as FrameNode).children) {
       if (child.visible !== false) {
-        traverseNode(child, tokens);
+        await traverseNode(child, tokens);
       }
     }
   }

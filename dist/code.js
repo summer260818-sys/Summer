@@ -155,18 +155,18 @@
   }
 
   // src/comparison-engine.ts
-  function extractDesignTokens(node) {
+  async function extractDesignTokens(node) {
     const tokens = {
       colors: [],
       typography: [],
       spacing: [],
       components: []
     };
-    traverseNode(node, tokens);
+    await traverseNode(node, tokens);
     return tokens;
   }
-  function traverseNode(node, tokens) {
-    var _a, _b, _c, _d;
+  async function traverseNode(node, tokens) {
+    var _a, _b, _c;
     if ("fills" in node && Array.isArray(node.fills)) {
       for (const fill of node.fills) {
         if (fill.type === "SOLID" && fill.visible !== false) {
@@ -254,10 +254,11 @@
     }
     if (node.type === "INSTANCE") {
       const instance = node;
+      const mainComp = await instance.getMainComponentAsync();
       tokens.components.push({
         name: node.name,
         nodeId: node.id,
-        mainComponentId: (_d = (_c = instance.mainComponent) == null ? void 0 : _c.id) != null ? _d : null,
+        mainComponentId: (_c = mainComp == null ? void 0 : mainComp.id) != null ? _c : null,
         variantProperties: instance.variantProperties,
         width: node.width,
         height: node.height,
@@ -267,7 +268,7 @@
     if ("children" in node) {
       for (const child of node.children) {
         if (child.visible !== false) {
-          traverseNode(child, tokens);
+          await traverseNode(child, tokens);
         }
       }
     }
@@ -704,7 +705,7 @@
         });
         return;
       }
-      const designTokens = extractDesignTokens(node);
+      const designTokens = await extractDesignTokens(node);
       const screenshotColors = extractDominantColors(
         screenshot.data,
         screenshot.width,

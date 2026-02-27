@@ -129,7 +129,7 @@ async function handleComparison(screenshot: ScreenshotData): Promise<void> {
     }
 
     // Extract design tokens from the selected frame
-    const designTokens = extractDesignTokens(node as FrameNode);
+    const designTokens = await extractDesignTokens(node);
 
     // Extract dominant colors from screenshot
     const screenshotColors = extractDominantColors(
