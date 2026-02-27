@@ -1,11 +1,11 @@
 /**
  * Design QA Comparison Engine
- * Analyzes Figma design frames and compares with screenshot pixel data.
+ * Compares Figma design frames with implementation frames.
  */
 
 import {
   RGB, rgbToHex, compareColors, contrastRatio, relativeLuminance,
-  extractDominantColors, classifyColorDiff,
+  classifyColorDiff,
 } from './color-utils';
 
 // ===== Types =====
@@ -62,25 +62,19 @@ export interface QAIssue {
   description: string;
   nodeName?: string;
   nodeId?: string;
-  // Color-specific
   expected?: string;
   actual?: string;
   deltaE?: number;
-  // Typography-specific
   designTypo?: Record<string, string>;
   actualTypo?: Record<string, string>;
-  // Spacing-specific
   expectedValue?: number;
   actualValue?: number;
-  // A11y-specific
   contrastRatio?: number;
   foreground?: string;
   background?: string;
   wcagCriteria?: string;
-  // Component-specific
   componentName?: string;
   differences?: string[];
-  // Suggestion
   suggestion?: string;
 }
 
@@ -93,27 +87,59 @@ export interface ComparisonSummary {
   passed: number;
 }
 
-export interface ScreenshotData {
+export interface NodeRect {
+  nodeId: string;
+  nodeName: string;
+  x: number;
+  y: number;
   width: number;
   height: number;
-  data: number[];
+}
+
+export interface ExtractionResult {
+  tokens: DesignToken;
+  nodeRects: NodeRect[];
 }
 
 // ===== Design Token Extraction =====
 
-export async function extractDesignTokens(node: SceneNode): Promise<DesignToken> {
+export async function extractDesignTokens(node: SceneNode): Promise<ExtractionResult> {
   const tokens: DesignToken = {
     colors: [],
     typography: [],
     spacing: [],
     components: [],
   };
+  const nodeRects: NodeRect[] = [];
 
-  await traverseNode(node, tokens);
-  return tokens;
+  const rootX = 'absoluteTransform' in node ? (node as any).absoluteTransform[0][2] : 0;
+  const rootY = 'absoluteTransform' in node ? (node as any).absoluteTransform[1][2] : 0;
+
+  await traverseNode(node, tokens, nodeRects, rootX, rootY);
+  return { tokens, nodeRects };
 }
 
-async function traverseNode(node: SceneNode, tokens: DesignToken): Promise<void> {
+async function traverseNode(
+  node: SceneNode,
+  tokens: DesignToken,
+  nodeRects: NodeRect[],
+  rootX: number,
+  rootY: number,
+): Promise<void> {
+  // Collect position rect for highlighting
+  if ('absoluteTransform' in node && 'width' in node) {
+    const absX = (node as any).absoluteTransform[0][2];
+    const absY = (node as any).absoluteTransform[1][2];
+    nodeRects.push({
+      nodeId: node.id,
+      nodeName: node.name,
+      x: absX - rootX,
+      y: absY - rootY,
+      width: (node as any).width,
+      height: (node as any).height,
+    });
+  }
+
   // Extract colors from fills
   if ('fills' in node && Array.isArray(node.fills)) {
     for (const fill of node.fills as Paint[]) {
@@ -156,21 +182,15 @@ async function traverseNode(node: SceneNode, tokens: DesignToken): Promise<void>
       let lineHeightValue: number | null = null;
       if (textNode.lineHeight !== figma.mixed) {
         const lh = textNode.lineHeight as LineHeight;
-        if (lh.unit === 'PIXELS') {
-          lineHeightValue = lh.value;
-        } else if (lh.unit === 'PERCENT') {
-          lineHeightValue = fontSize * lh.value / 100;
-        }
+        if (lh.unit === 'PIXELS') lineHeightValue = lh.value;
+        else if (lh.unit === 'PERCENT') lineHeightValue = fontSize * lh.value / 100;
       }
 
       let letterSpacingValue = 0;
       if (textNode.letterSpacing !== figma.mixed) {
         const ls = textNode.letterSpacing as LetterSpacing;
-        if (ls.unit === 'PIXELS') {
-          letterSpacingValue = ls.value;
-        } else if (ls.unit === 'PERCENT') {
-          letterSpacingValue = fontSize * ls.value / 100;
-        }
+        if (ls.unit === 'PIXELS') letterSpacingValue = ls.value;
+        else if (ls.unit === 'PERCENT') letterSpacingValue = fontSize * ls.value / 100;
       }
 
       tokens.typography.push({
@@ -227,7 +247,7 @@ async function traverseNode(node: SceneNode, tokens: DesignToken): Promise<void>
   if ('children' in node) {
     for (const child of (node as FrameNode).children) {
       if (child.visible !== false) {
-        await traverseNode(child, tokens);
+        await traverseNode(child, tokens, nodeRects, rootX, rootY);
       }
     }
   }
@@ -254,114 +274,188 @@ function getFontWeight(style: string): number {
   return 400;
 }
 
-// ===== Comparison Logic =====
+function formatTypoProps(typo: DesignTypography): Record<string, string> {
+  return {
+    fontFamily: typo.fontFamily,
+    fontSize: `${typo.fontSize}px`,
+    fontWeight: String(typo.fontWeight),
+    lineHeight: typo.lineHeight ? `${typo.lineHeight}px` : 'auto',
+    letterSpacing: `${typo.letterSpacing}px`,
+  };
+}
 
-export function runQAComparison(
+// ===== Frame-to-Frame Comparison =====
+
+export function runFrameComparison(
   designTokens: DesignToken,
-  screenshotColors: { color: RGB; count: number; hex: string }[],
+  implTokens: DesignToken,
   designMode: 'light' | 'dark'
 ): { issues: QAIssue[]; summary: ComparisonSummary } {
   const issues: QAIssue[] = [];
 
-  // 1. Color checks
-  issues.push(...checkColors(designTokens.colors, screenshotColors));
+  // Cross-frame comparisons (design vs implementation)
+  issues.push(...crossCompareColors(designTokens.colors, implTokens.colors));
+  issues.push(...crossCompareTypography(designTokens.typography, implTokens.typography));
+  issues.push(...crossCompareSpacing(designTokens.spacing, implTokens.spacing));
 
-  // 2. Typography checks
-  issues.push(...checkTypography(designTokens.typography));
+  // Self-checks on implementation
+  issues.push(...checkTypography(implTokens.typography));
+  issues.push(...checkSpacing(implTokens.spacing));
+  issues.push(...checkComponents(implTokens.components));
+  issues.push(...checkAccessibility(implTokens.colors, implTokens.typography, designMode));
 
-  // 3. Spacing checks
-  issues.push(...checkSpacing(designTokens.spacing));
+  // Deduplicate
+  const seen = new Set<string>();
+  const deduped = issues.filter(issue => {
+    const key = `${issue.category}:${issue.title}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
-  // 4. Component consistency checks
-  issues.push(...checkComponents(designTokens.components));
-
-  // 5. Accessibility checks
-  issues.push(...checkAccessibility(designTokens.colors, designTokens.typography, designMode));
-
-  // Calculate summary
   const summary: ComparisonSummary = {
-    total: issues.length,
-    critical: issues.filter(i => i.severity === 'critical').length,
-    major: issues.filter(i => i.severity === 'major').length,
-    minor: issues.filter(i => i.severity === 'minor').length,
-    info: issues.filter(i => i.severity === 'info').length,
-    passed: countPassedChecks(designTokens, issues),
+    total: deduped.length,
+    critical: deduped.filter(i => i.severity === 'critical').length,
+    major: deduped.filter(i => i.severity === 'major').length,
+    minor: deduped.filter(i => i.severity === 'minor').length,
+    info: deduped.filter(i => i.severity === 'info').length,
+    passed: countPassedChecks(implTokens, deduped),
   };
 
-  return { issues, summary };
+  return { issues: deduped, summary };
 }
 
-// ===== Color Checks =====
+// ===== Cross-Frame Color Comparison =====
 
-function checkColors(
-  designColors: DesignColor[],
-  screenshotColors: { color: RGB; count: number; hex: string }[]
-): QAIssue[] {
+function crossCompareColors(designColors: DesignColor[], implColors: DesignColor[]): QAIssue[] {
   const issues: QAIssue[] = [];
 
-  if (screenshotColors.length === 0) return issues;
+  // Index impl colors by normalized node name + property
+  const implMap = new Map<string, DesignColor[]>();
+  for (const ic of implColors) {
+    const key = ic.nodeName.toLowerCase().trim();
+    if (!implMap.has(key)) implMap.set(key, []);
+    implMap.get(key)!.push(ic);
+  }
 
-  // Check each design color against screenshot colors
-  for (const designColor of designColors) {
-    let bestMatch = Infinity;
-    let bestMatchHex = '';
+  const checked = new Set<string>();
 
-    for (const sc of screenshotColors) {
-      const diff = compareColors(designColor.rgb, sc.color);
-      if (diff < bestMatch) {
-        bestMatch = diff;
-        bestMatchHex = sc.hex;
-      }
-    }
+  for (const dc of designColors) {
+    const key = dc.nodeName.toLowerCase().trim();
+    const implMatches = implMap.get(key);
+    if (!implMatches) continue;
 
-    const classification = classifyColorDiff(bestMatch);
+    // Find matching property type
+    const ic = implMatches.find(c => c.property === dc.property) || implMatches[0];
+    const checkKey = `${key}:${dc.property}`;
+    if (checked.has(checkKey)) continue;
+    checked.add(checkKey);
+
+    const diff = compareColors(dc.rgb, ic.rgb);
+    const classification = classifyColorDiff(diff);
 
     if (classification === 'significant' || classification === 'different') {
       issues.push({
         category: 'color',
         severity: classification === 'different' ? 'critical' : 'major',
-        title: `Color mismatch on "${designColor.nodeName}"`,
-        description: `The ${designColor.property} color doesn't match between design and implementation. Delta E: ${bestMatch.toFixed(1)}`,
-        nodeName: designColor.nodeName,
-        nodeId: designColor.nodeId,
-        expected: designColor.hex,
-        actual: bestMatchHex,
-        deltaE: bestMatch,
-        suggestion: `Update the ${designColor.property} color from ${bestMatchHex} to ${designColor.hex}`,
+        title: `Color mismatch: "${dc.nodeName}"`,
+        description: `${dc.property} color differs between design and implementation. Delta E: ${diff.toFixed(1)}`,
+        nodeName: ic.nodeName,
+        nodeId: ic.nodeId,
+        expected: dc.hex,
+        actual: ic.hex,
+        deltaE: diff,
+        suggestion: `Change ${dc.property} from ${ic.hex} to ${dc.hex}`,
       });
     } else if (classification === 'noticeable') {
       issues.push({
         category: 'color',
         severity: 'minor',
-        title: `Slight color difference on "${designColor.nodeName}"`,
-        description: `The ${designColor.property} color has a noticeable but minor difference. Delta E: ${bestMatch.toFixed(1)}`,
-        nodeName: designColor.nodeName,
-        nodeId: designColor.nodeId,
-        expected: designColor.hex,
-        actual: bestMatchHex,
-        deltaE: bestMatch,
-        suggestion: `Consider adjusting the ${designColor.property} color to exactly match ${designColor.hex}`,
+        title: `Slight color diff: "${dc.nodeName}"`,
+        description: `${dc.property} has a minor color difference. Delta E: ${diff.toFixed(1)}`,
+        nodeName: ic.nodeName,
+        nodeId: ic.nodeId,
+        expected: dc.hex,
+        actual: ic.hex,
+        deltaE: diff,
+        suggestion: `Consider adjusting ${dc.property} to exactly ${dc.hex}`,
       });
     }
   }
 
-  // Check for colors in screenshot not present in design
-  const topScreenshotColors = screenshotColors.slice(0, 10);
-  for (const sc of topScreenshotColors) {
-    let bestMatch = Infinity;
+  // Check for impl colors not in design palette
+  const designHexSet = new Set(designColors.map(dc => dc.hex.toLowerCase()));
+  const reportedHex = new Set<string>();
+
+  for (const ic of implColors) {
+    if (designHexSet.has(ic.hex.toLowerCase()) || reportedHex.has(ic.hex.toLowerCase())) continue;
+
+    let closestDiff = Infinity;
     for (const dc of designColors) {
-      const diff = compareColors(dc.rgb, sc.color);
-      if (diff < bestMatch) bestMatch = diff;
+      const diff = compareColors(dc.rgb, ic.rgb);
+      if (diff < closestDiff) closestDiff = diff;
     }
 
-    if (bestMatch > 10 && designColors.length > 0) {
+    if (closestDiff > 10 && designColors.length > 0) {
       issues.push({
         category: 'color',
         severity: 'info',
-        title: `Unexpected color detected: ${sc.hex}`,
-        description: `A prominent color in the screenshot (${sc.hex}) doesn't match any design color. This may indicate an unintended color being used.`,
-        actual: sc.hex,
-        suggestion: 'Verify this color is intentional or replace with a design system color.',
+        title: `Non-design color: "${ic.nodeName}"`,
+        description: `Color ${ic.hex} on ${ic.property} is not in the design palette.`,
+        nodeName: ic.nodeName,
+        nodeId: ic.nodeId,
+        actual: ic.hex,
+        suggestion: 'Verify this color is intentional or use a design system color.',
+      });
+      reportedHex.add(ic.hex.toLowerCase());
+    }
+  }
+
+  return issues;
+}
+
+// ===== Cross-Frame Typography Comparison =====
+
+function crossCompareTypography(designTypo: DesignTypography[], implTypo: DesignTypography[]): QAIssue[] {
+  const issues: QAIssue[] = [];
+
+  const implMap = new Map<string, DesignTypography>();
+  for (const it of implTypo) {
+    implMap.set(it.nodeName.toLowerCase().trim(), it);
+  }
+
+  for (const dt of designTypo) {
+    const key = dt.nodeName.toLowerCase().trim();
+    const it = implMap.get(key);
+    if (!it) continue;
+
+    const diffs: string[] = [];
+
+    if (dt.fontFamily !== it.fontFamily) {
+      diffs.push(`font: ${dt.fontFamily} \u2192 ${it.fontFamily}`);
+    }
+    if (Math.abs(dt.fontSize - it.fontSize) > 0.5) {
+      diffs.push(`size: ${dt.fontSize}px \u2192 ${it.fontSize}px`);
+    }
+    if (dt.fontWeight !== it.fontWeight) {
+      diffs.push(`weight: ${dt.fontWeight} \u2192 ${it.fontWeight}`);
+    }
+    if (dt.lineHeight !== null && it.lineHeight !== null && Math.abs(dt.lineHeight - it.lineHeight) > 0.5) {
+      diffs.push(`line-height: ${Math.round(dt.lineHeight)}px \u2192 ${Math.round(it.lineHeight)}px`);
+    }
+
+    if (diffs.length > 0) {
+      const severity = diffs.some(d => d.startsWith('font:') || d.startsWith('size:')) ? 'major' : 'minor';
+      issues.push({
+        category: 'typography',
+        severity,
+        title: `Typography mismatch: "${dt.nodeName}"`,
+        description: diffs.join(', '),
+        nodeName: it.nodeName,
+        nodeId: it.nodeId,
+        designTypo: formatTypoProps(dt),
+        actualTypo: formatTypoProps(it),
+        suggestion: `Update typography to match design: ${diffs.join('; ')}`,
       });
     }
   }
@@ -369,25 +463,60 @@ function checkColors(
   return issues;
 }
 
-// ===== Typography Checks =====
+// ===== Cross-Frame Spacing Comparison =====
+
+function crossCompareSpacing(designSpacing: DesignSpacing[], implSpacing: DesignSpacing[]): QAIssue[] {
+  const issues: QAIssue[] = [];
+
+  const implMap = new Map<string, DesignSpacing[]>();
+  for (const is_ of implSpacing) {
+    const key = is_.nodeName.toLowerCase().trim();
+    if (!implMap.has(key)) implMap.set(key, []);
+    implMap.get(key)!.push(is_);
+  }
+
+  for (const ds of designSpacing) {
+    const key = ds.nodeName.toLowerCase().trim();
+    const implSps = implMap.get(key);
+    if (!implSps) continue;
+
+    const match = implSps.find(is_ => is_.type === ds.type && is_.direction === ds.direction);
+    if (!match) continue;
+
+    if (Math.abs(ds.value - match.value) > 0.5) {
+      issues.push({
+        category: 'spacing',
+        severity: Math.abs(ds.value - match.value) > 4 ? 'major' : 'minor',
+        title: `Spacing mismatch: "${ds.nodeName}" ${ds.direction} ${ds.type}`,
+        description: `${ds.direction} ${ds.type}: design ${ds.value}px vs impl ${match.value}px`,
+        nodeName: match.nodeName,
+        nodeId: match.nodeId,
+        expectedValue: ds.value,
+        actualValue: match.value,
+        suggestion: `Change ${ds.type} ${ds.direction} from ${match.value}px to ${ds.value}px`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+// ===== Typography Self-Checks =====
 
 function checkTypography(typography: DesignTypography[]): QAIssue[] {
   const issues: QAIssue[] = [];
 
-  // Check for inconsistencies within the design itself
   const fontFamilies = new Set(typography.map(t => t.fontFamily));
   if (fontFamilies.size > 3) {
     issues.push({
       category: 'typography',
       severity: 'major',
       title: 'Too many font families used',
-      description: `${fontFamilies.size} different font families detected. Design systems typically use 1-2 font families.`,
-      suggestion: `Consider consolidating to fewer font families. Found: ${[...fontFamilies].join(', ')}`,
+      description: `${fontFamilies.size} different font families detected. Design systems typically use 1-2.`,
+      suggestion: `Consolidate fonts. Found: ${[...fontFamilies].join(', ')}`,
     });
   }
 
-  // Check font size consistency (look for non-standard sizes)
-  const fontSizes = typography.map(t => t.fontSize).sort((a, b) => a - b);
   const standardScales = [10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72];
 
   for (const typo of typography) {
@@ -400,62 +529,39 @@ function checkTypography(typography: DesignTypography[]): QAIssue[] {
         category: 'typography',
         severity: 'minor',
         title: `Non-standard font size: ${typo.fontSize}px`,
-        description: `"${typo.nodeName}" uses ${typo.fontSize}px which is close to the standard ${nearestStandard}px.`,
+        description: `"${typo.nodeName}" uses ${typo.fontSize}px, close to standard ${nearestStandard}px.`,
         nodeName: typo.nodeName,
         nodeId: typo.nodeId,
-        designTypo: formatTypoProps(typo),
-        actualTypo: formatTypoProps({ ...typo, fontSize: nearestStandard }),
-        suggestion: `Consider using ${nearestStandard}px for consistency with the type scale.`,
+        suggestion: `Consider using ${nearestStandard}px for consistency.`,
       });
     }
 
-    // Check line height
     if (typo.lineHeight !== null) {
       const ratio = typo.lineHeight / typo.fontSize;
       if (ratio < 1.2) {
         issues.push({
           category: 'typography',
           severity: 'major',
-          title: `Tight line height on "${typo.nodeName}"`,
-          description: `Line height ratio is ${ratio.toFixed(2)} (${typo.lineHeight}px / ${typo.fontSize}px). Minimum recommended is 1.2 for readability.`,
+          title: `Tight line height: "${typo.nodeName}"`,
+          description: `Line height ratio ${ratio.toFixed(2)} (${typo.lineHeight}px / ${typo.fontSize}px). Minimum 1.2 recommended.`,
           nodeName: typo.nodeName,
           nodeId: typo.nodeId,
-          designTypo: formatTypoProps(typo),
-          suggestion: `Increase line height to at least ${Math.ceil(typo.fontSize * 1.2)}px (1.2x ratio).`,
+          suggestion: `Increase line height to at least ${Math.ceil(typo.fontSize * 1.2)}px.`,
         });
       }
     }
   }
 
-  // Check for duplicate text styles that should be unified
-  const styleGroups = new Map<string, DesignTypography[]>();
-  for (const typo of typography) {
-    const key = `${typo.fontFamily}-${typo.fontSize}-${typo.fontWeight}`;
-    if (!styleGroups.has(key)) styleGroups.set(key, []);
-    styleGroups.get(key)!.push(typo);
-  }
-
   return issues;
 }
 
-function formatTypoProps(typo: DesignTypography | (Omit<DesignTypography, 'fontSize'> & { fontSize: number })): Record<string, string> {
-  return {
-    fontFamily: typo.fontFamily,
-    fontSize: `${typo.fontSize}px`,
-    fontWeight: String(typo.fontWeight),
-    lineHeight: typo.lineHeight ? `${typo.lineHeight}px` : 'auto',
-    letterSpacing: `${typo.letterSpacing}px`,
-  };
-}
-
-// ===== Spacing Checks =====
+// ===== Spacing Self-Checks =====
 
 function checkSpacing(spacing: DesignSpacing[]): QAIssue[] {
   const issues: QAIssue[] = [];
   const spacingScale = [0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 56, 64, 80, 96];
 
   for (const sp of spacing) {
-    // Check if spacing follows a consistent scale
     const isOnScale = spacingScale.includes(sp.value);
     if (!isOnScale && sp.value > 0) {
       const nearest = spacingScale.reduce((prev, curr) =>
@@ -466,39 +572,31 @@ function checkSpacing(spacing: DesignSpacing[]): QAIssue[] {
         issues.push({
           category: 'spacing',
           severity: 'minor',
-          title: `Off-scale ${sp.type} on "${sp.nodeName}"`,
+          title: `Off-scale ${sp.type}: "${sp.nodeName}"`,
           description: `${sp.direction} ${sp.type} is ${sp.value}px, nearest scale value is ${nearest}px.`,
           nodeName: sp.nodeName,
           nodeId: sp.nodeId,
           expectedValue: nearest,
           actualValue: sp.value,
-          suggestion: `Adjust ${sp.type} to ${nearest}px to align with the spacing scale.`,
+          suggestion: `Adjust ${sp.type} to ${nearest}px to align with spacing scale.`,
         });
       }
     }
 
-    // Check for asymmetric padding
     if (sp.type === 'padding') {
-      const siblingPaddings = spacing.filter(
-        s => s.nodeId === sp.nodeId && s.type === 'padding'
-      );
-
-      const horizontal = siblingPaddings.filter(s => s.direction === 'left' || s.direction === 'right');
+      const siblings = spacing.filter(s => s.nodeId === sp.nodeId && s.type === 'padding');
+      const horizontal = siblings.filter(s => s.direction === 'left' || s.direction === 'right');
       if (horizontal.length === 2 && horizontal[0].value !== horizontal[1].value) {
-        const existing = issues.find(i =>
-          i.nodeId === sp.nodeId && i.title.includes('Asymmetric horizontal padding')
-        );
+        const existing = issues.find(i => i.nodeId === sp.nodeId && i.title.includes('Asymmetric horizontal'));
         if (!existing) {
           issues.push({
             category: 'spacing',
             severity: 'minor',
-            title: `Asymmetric horizontal padding on "${sp.nodeName}"`,
-            description: `Left padding (${horizontal.find(h => h.direction === 'left')?.value}px) differs from right (${horizontal.find(h => h.direction === 'right')?.value}px).`,
+            title: `Asymmetric horizontal padding: "${sp.nodeName}"`,
+            description: `Left (${horizontal.find(h => h.direction === 'left')?.value}px) differs from right (${horizontal.find(h => h.direction === 'right')?.value}px).`,
             nodeName: sp.nodeName,
             nodeId: sp.nodeId,
-            expectedValue: Math.max(horizontal[0].value, horizontal[1].value),
-            actualValue: Math.min(horizontal[0].value, horizontal[1].value),
-            suggestion: 'Consider using symmetric horizontal padding for consistency.',
+            suggestion: 'Consider using symmetric horizontal padding.',
           });
         }
       }
@@ -508,26 +606,21 @@ function checkSpacing(spacing: DesignSpacing[]): QAIssue[] {
   return issues;
 }
 
-// ===== Component Consistency Checks =====
+// ===== Component Checks =====
 
 function checkComponents(components: DesignComponent[]): QAIssue[] {
   const issues: QAIssue[] = [];
 
-  // Group instances by main component
   const componentGroups = new Map<string, DesignComponent[]>();
   for (const comp of components) {
     if (comp.mainComponentId) {
-      if (!componentGroups.has(comp.mainComponentId)) {
-        componentGroups.set(comp.mainComponentId, []);
-      }
+      if (!componentGroups.has(comp.mainComponentId)) componentGroups.set(comp.mainComponentId, []);
       componentGroups.get(comp.mainComponentId)!.push(comp);
     }
   }
 
-  // Check for size inconsistencies among same component instances
   for (const [, instances] of componentGroups) {
     if (instances.length < 2) continue;
-
     const widths = new Set(instances.map(i => Math.round(i.width)));
     const heights = new Set(instances.map(i => Math.round(i.height)));
 
@@ -539,26 +632,25 @@ function checkComponents(components: DesignComponent[]): QAIssue[] {
       issues.push({
         category: 'component',
         severity: 'major',
-        title: `Inconsistent sizes for "${instances[0].name}"`,
-        description: `${instances.length} instances of this component have different sizes.`,
+        title: `Inconsistent sizes: "${instances[0].name}"`,
+        description: `${instances.length} instances have different sizes.`,
         componentName: instances[0].name,
         differences: diffs,
-        suggestion: 'Ensure all instances use consistent sizing, or use explicit variant properties for different sizes.',
+        suggestion: 'Ensure all instances use consistent sizing.',
       });
     }
   }
 
-  // Check for detached instances (components without mainComponentId)
   for (const comp of components) {
     if (!comp.mainComponentId) {
       issues.push({
         category: 'component',
         severity: 'info',
-        title: `Potentially detached component: "${comp.name}"`,
-        description: 'This component instance may have been detached from its main component.',
+        title: `Detached component: "${comp.name}"`,
+        description: 'This instance may be detached from its main component.',
         componentName: comp.name,
         nodeId: comp.nodeId,
-        suggestion: 'Reconnect to main component to maintain design consistency.',
+        suggestion: 'Reconnect to main component for consistency.',
       });
     }
   }
@@ -575,7 +667,6 @@ function checkAccessibility(
 ): QAIssue[] {
   const issues: QAIssue[] = [];
 
-  // Find text colors and background colors
   const textColors = colors.filter(c => {
     const name = c.nodeName.toLowerCase();
     return name.includes('text') || name.includes('label') || name.includes('title') ||
@@ -588,34 +679,20 @@ function checkAccessibility(
            name.includes('card') || name.includes('container') || name.includes('frame');
   });
 
-  // If we don't have explicit bg colors, use a default based on mode
   const defaultBg: RGB = designMode === 'dark'
     ? { r: 0.1, g: 0.1, b: 0.1 }
     : { r: 1, g: 1, b: 1 };
 
-  const backgrounds = bgColors.length > 0
-    ? bgColors.map(c => c.rgb)
-    : [defaultBg];
+  const backgrounds = bgColors.length > 0 ? bgColors.map(c => c.rgb) : [defaultBg];
 
-  // Check contrast for each text-like color against backgrounds
   for (const textColor of textColors) {
     for (const bg of backgrounds) {
       const ratio = contrastRatio(textColor.rgb, bg);
       const textHex = rgbToHex(textColor.rgb);
       const bgHex = rgbToHex(bg);
 
-      // Normal text needs 4.5:1 (AA), 7:1 (AAA)
-      // Large text (18px+ or 14px bold) needs 3:1 (AA), 4.5:1 (AAA)
-      const relatedTypo = typography.find(t => {
-        return t.nodeName === textColor.nodeName ||
-               t.nodeId === textColor.nodeId;
-      });
-
-      const isLargeText = relatedTypo && (
-        relatedTypo.fontSize >= 18 ||
-        (relatedTypo.fontSize >= 14 && relatedTypo.fontWeight >= 700)
-      );
-
+      const relatedTypo = typography.find(t => t.nodeName === textColor.nodeName || t.nodeId === textColor.nodeId);
+      const isLargeText = relatedTypo && (relatedTypo.fontSize >= 18 || (relatedTypo.fontSize >= 14 && relatedTypo.fontWeight >= 700));
       const aaThreshold = isLargeText ? 3 : 4.5;
       const aaaThreshold = isLargeText ? 4.5 : 7;
 
@@ -624,21 +701,21 @@ function checkAccessibility(
           category: 'a11y',
           severity: 'critical',
           title: `Insufficient contrast: "${textColor.nodeName}"`,
-          description: `Contrast ratio ${ratio.toFixed(2)}:1 fails WCAG AA (requires ${aaThreshold}:1${isLargeText ? ' for large text' : ''}).`,
+          description: `Contrast ${ratio.toFixed(2)}:1 fails WCAG AA (needs ${aaThreshold}:1).`,
           nodeName: textColor.nodeName,
           nodeId: textColor.nodeId,
           contrastRatio: ratio,
           foreground: textHex,
           background: bgHex,
           wcagCriteria: 'WCAG 2.1 - 1.4.3 Contrast (Minimum)',
-          suggestion: `Increase contrast to at least ${aaThreshold}:1. Current: ${ratio.toFixed(2)}:1`,
+          suggestion: `Increase contrast to at least ${aaThreshold}:1.`,
         });
       } else if (ratio < aaaThreshold) {
         issues.push({
           category: 'a11y',
           severity: 'minor',
           title: `Contrast below AAA: "${textColor.nodeName}"`,
-          description: `Contrast ratio ${ratio.toFixed(2)}:1 passes AA but fails AAA (requires ${aaaThreshold}:1).`,
+          description: `Contrast ${ratio.toFixed(2)}:1 passes AA but fails AAA (needs ${aaaThreshold}:1).`,
           nodeName: textColor.nodeName,
           nodeId: textColor.nodeId,
           contrastRatio: ratio,
@@ -651,25 +728,17 @@ function checkAccessibility(
     }
   }
 
-  // Check touch target sizes
-  const interactiveNames = ['button', 'btn', 'link', 'input', 'toggle', 'switch', 'checkbox', 'radio', 'tab', 'icon-button'];
-  const smallComponents = colors.filter(c => {
-    const name = c.nodeName.toLowerCase();
-    return interactiveNames.some(n => name.includes(n));
-  });
-
-  // Check text size accessibility
   for (const typo of typography) {
     if (typo.fontSize < 12) {
       issues.push({
         category: 'a11y',
         severity: 'major',
         title: `Text too small: "${typo.nodeName}"`,
-        description: `Font size ${typo.fontSize}px is below the minimum recommended 12px for readability.`,
+        description: `Font size ${typo.fontSize}px is below minimum 12px.`,
         nodeName: typo.nodeName,
         nodeId: typo.nodeId,
         wcagCriteria: 'WCAG 2.1 - 1.4.4 Resize Text',
-        suggestion: `Increase font size to at least 12px.`,
+        suggestion: 'Increase font size to at least 12px.',
       });
     }
   }

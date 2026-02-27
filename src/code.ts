@@ -1,100 +1,86 @@
 /**
  * Design QA Inspector - Figma Plugin Main Code
  *
- * Compares Figma design guide frames with uploaded screenshots
+ * Compares Figma design frames with implementation frames
  * to identify color, typography, spacing, component, and accessibility issues.
- *
- * Supports Light / Dark mode comparison.
  */
 
-import { extractDominantColors, rgbToHex } from './color-utils';
 import {
   extractDesignTokens,
-  runQAComparison,
+  runFrameComparison,
   QAIssue,
-  ScreenshotData,
 } from './comparison-engine';
 
 // ===== Plugin Init =====
 
 figma.showUI(__html__, {
   width: 420,
-  height: 680,
+  height: 720,
   themeColors: true,
   title: 'Design QA Inspector',
 });
 
 let currentDesignMode: 'light' | 'dark' = 'light';
-let selectedFrameId: string | null = null;
+let selectedDesignFrameId: string | null = null;
+let selectedImplFrameId: string | null = null;
 
-// ===== Selection Listener =====
-
-figma.on('selectionchange', () => {
-  // Handled via explicit user action (button click) not auto-selection
-});
+const VALID_TYPES = ['FRAME', 'COMPONENT', 'COMPONENT_SET', 'INSTANCE', 'GROUP', 'SECTION'];
 
 // ===== Message Handler =====
 
 figma.ui.onmessage = async (msg: {
   type: string;
   designMode?: 'light' | 'dark';
-  screenshot?: ScreenshotData;
   format?: string;
   issues?: QAIssue[];
-  opacity?: number;
+  nodeId?: string;
 }) => {
   switch (msg.type) {
     case 'select-design-frame':
-      handleFrameSelection();
+      handleFrameSelection('design');
       break;
-
+    case 'select-impl-frame':
+      handleFrameSelection('impl');
+      break;
     case 'set-design-mode':
-      if (msg.designMode) {
-        currentDesignMode = msg.designMode;
-      }
+      if (msg.designMode) currentDesignMode = msg.designMode;
       break;
-
     case 'run-comparison':
-      if (msg.screenshot) {
-        await handleComparison(msg.screenshot);
-      }
+      await handleComparison();
       break;
-
+    case 'highlight-node':
+      if (msg.nodeId) await highlightNode(msg.nodeId);
+      break;
     case 'export-report':
-      if (msg.issues && msg.format) {
-        handleExport(msg.format, msg.issues);
-      }
-      break;
-
-    case 'update-overlay':
-      if (msg.opacity !== undefined) {
-        handleOverlayUpdate(msg.opacity);
-      }
+      if (msg.issues && msg.format) handleExport(msg.format, msg.issues);
       break;
   }
 };
 
 // ===== Frame Selection =====
 
-function handleFrameSelection(): void {
+function handleFrameSelection(target: 'design' | 'impl'): void {
   const selection = figma.currentPage.selection;
 
   if (selection.length === 0) {
-    figma.notify('Please select a frame in Figma first.', { error: true });
+    figma.notify('Figma에서 프레임을 먼저 선택하세요.', { error: true });
     return;
   }
 
   const node = selection[0];
-  const validTypes = ['FRAME', 'COMPONENT', 'COMPONENT_SET', 'INSTANCE', 'GROUP', 'SECTION'];
-  if (!validTypes.includes(node.type)) {
-    figma.notify('Please select a Frame, Component, Instance, or Group.', { error: true });
+  if (!VALID_TYPES.includes(node.type)) {
+    figma.notify('Frame, Component, Instance 또는 Group을 선택하세요.', { error: true });
     return;
   }
 
-  selectedFrameId = node.id;
+  if (target === 'design') {
+    selectedDesignFrameId = node.id;
+  } else {
+    selectedImplFrameId = node.id;
+  }
 
   figma.ui.postMessage({
-    type: 'frame-selected',
+    type: target === 'design' ? 'design-frame-selected' : 'impl-frame-selected',
     frame: {
       id: node.id,
       name: node.name,
@@ -103,50 +89,66 @@ function handleFrameSelection(): void {
     },
   });
 
-  figma.notify(`Selected: "${node.name}" (${Math.round(node.width)}x${Math.round(node.height)})`);
+  const label = target === 'design' ? 'Design' : 'Implementation';
+  figma.notify(`${label}: "${node.name}" (${Math.round((node as any).width)}x${Math.round((node as any).height)})`);
 }
 
 // ===== Comparison =====
 
-async function handleComparison(screenshot: ScreenshotData): Promise<void> {
+async function handleComparison(): Promise<void> {
   try {
-    if (!selectedFrameId) {
+    if (!selectedDesignFrameId || !selectedImplFrameId) {
       figma.ui.postMessage({
         type: 'comparison-error',
-        error: 'No design frame selected.',
+        error: 'Design과 Implementation 프레임을 모두 선택하세요.',
       });
       return;
     }
 
-    const node = await figma.getNodeByIdAsync(selectedFrameId);
-    const validTypes = ['FRAME', 'COMPONENT', 'COMPONENT_SET', 'INSTANCE', 'GROUP', 'SECTION'];
-    if (!node || !validTypes.includes(node.type)) {
+    if (selectedDesignFrameId === selectedImplFrameId) {
       figma.ui.postMessage({
         type: 'comparison-error',
-        error: 'Selected frame no longer exists. Please select again.',
+        error: '같은 프레임입니다. 서로 다른 프레임을 선택하세요.',
       });
       return;
     }
 
-    // Extract design tokens from the selected frame
-    const designTokens = await extractDesignTokens(node);
+    const designNode = await figma.getNodeByIdAsync(selectedDesignFrameId);
+    const implNode = await figma.getNodeByIdAsync(selectedImplFrameId);
 
-    // Extract dominant colors from screenshot
-    const screenshotColors = extractDominantColors(
-      screenshot.data,
-      screenshot.width,
-      screenshot.height,
-      Math.max(1, Math.floor(Math.min(screenshot.width, screenshot.height) / 100))
-    );
+    if (!designNode || !VALID_TYPES.includes(designNode.type)) {
+      figma.ui.postMessage({ type: 'comparison-error', error: 'Design 프레임을 찾을 수 없습니다.' });
+      return;
+    }
+    if (!implNode || !VALID_TYPES.includes(implNode.type)) {
+      figma.ui.postMessage({ type: 'comparison-error', error: 'Implementation 프레임을 찾을 수 없습니다.' });
+      return;
+    }
+
+    // Extract tokens from both frames
+    const designResult = await extractDesignTokens(designNode);
+    const implResult = await extractDesignTokens(implNode);
+
+    // Export impl frame as image for preview
+    let frameImageBase64 = '';
+    try {
+      const imageBytes = await (implNode as any).exportAsync({
+        format: 'PNG',
+        constraint: { type: 'WIDTH', value: 600 },
+      });
+      frameImageBase64 = figma.base64Encode(imageBytes);
+    } catch (_e) {
+      // Export failed, continue without image
+    }
 
     // Run comparison
-    const { issues, summary } = runQAComparison(
-      designTokens,
-      screenshotColors,
+    const { issues, summary } = runFrameComparison(
+      designResult.tokens,
+      implResult.tokens,
       currentDesignMode
     );
 
-    // Sort issues by severity
+    // Sort by severity
     const severityOrder: Record<string, number> = { critical: 0, major: 1, minor: 2, info: 3 };
     issues.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 
@@ -154,43 +156,33 @@ async function handleComparison(screenshot: ScreenshotData): Promise<void> {
       type: 'comparison-results',
       issues,
       summary,
+      nodeRects: implResult.nodeRects,
+      frameImage: frameImageBase64,
+      frameWidth: ('width' in implNode) ? (implNode as any).width : 0,
+      frameHeight: ('height' in implNode) ? (implNode as any).height : 0,
     });
 
-    // Summary notification
     const notifMsg = summary.critical > 0
-      ? `Found ${summary.total} issues (${summary.critical} critical)`
+      ? `${summary.total}개 이슈 (${summary.critical}개 심각)`
       : summary.total > 0
-        ? `Found ${summary.total} issues`
-        : 'All checks passed!';
+        ? `${summary.total}개 이슈 발견`
+        : '모든 검사 통과!';
 
-    figma.notify(notifMsg, {
-      timeout: 3000,
-      error: summary.critical > 0,
-    });
+    figma.notify(notifMsg, { timeout: 3000, error: summary.critical > 0 });
 
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-    figma.ui.postMessage({
-      type: 'comparison-error',
-      error: errorMessage,
-    });
-    figma.notify('Comparison failed: ' + errorMessage, { error: true });
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    figma.ui.postMessage({ type: 'comparison-error', error: errorMessage });
+    figma.notify('비교 실패: ' + errorMessage, { error: true });
   }
 }
 
-// ===== Overlay =====
+// ===== Highlight Node =====
 
-let overlayNode: RectangleNode | null = null;
-
-async function handleOverlayUpdate(opacity: number): Promise<void> {
-  // Create or update an overlay rectangle for visual comparison
-  if (!selectedFrameId) return;
-
-  const frame = await figma.getNodeByIdAsync(selectedFrameId);
-  if (!frame || !('absoluteTransform' in frame)) return;
-
-  if (overlayNode) {
-    overlayNode.opacity = opacity;
+async function highlightNode(nodeId: string): Promise<void> {
+  const node = await figma.getNodeByIdAsync(nodeId);
+  if (node) {
+    figma.viewport.scrollAndZoomIntoView([node as SceneNode]);
   }
 }
 
@@ -198,15 +190,9 @@ async function handleOverlayUpdate(opacity: number): Promise<void> {
 
 function handleExport(format: string, issues: QAIssue[]): void {
   switch (format) {
-    case 'json':
-      exportJSON(issues);
-      break;
-    case 'csv':
-      exportCSV(issues);
-      break;
-    case 'figma':
-      createFigmaAnnotations(issues);
-      break;
+    case 'json': exportJSON(issues); break;
+    case 'csv': exportCSV(issues); break;
+    case 'figma': createFigmaAnnotations(issues); break;
   }
 }
 
@@ -228,12 +214,10 @@ function exportJSON(issues: QAIssue[]): void {
     })),
   };
 
-  // Copy to clipboard via notification (Figma doesn't have clipboard API in plugin sandbox)
   const jsonStr = JSON.stringify(report, null, 2);
-  figma.notify('JSON report generated. Check console (Developer > Open Console).', { timeout: 5000 });
+  figma.notify('JSON report generated. Check console.', { timeout: 5000 });
   console.log('=== Design QA Report (JSON) ===');
   console.log(jsonStr);
-
   figma.ui.postMessage({ type: 'export-complete', format: 'json', data: jsonStr });
 }
 
@@ -251,26 +235,24 @@ function exportCSV(issues: QAIssue[]): void {
   ]);
 
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-  figma.notify('CSV report generated. Check console (Developer > Open Console).', { timeout: 5000 });
+  figma.notify('CSV report generated. Check console.', { timeout: 5000 });
   console.log('=== Design QA Report (CSV) ===');
   console.log(csv);
-
   figma.ui.postMessage({ type: 'export-complete', format: 'csv', data: csv });
 }
 
 async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
-  if (!selectedFrameId) {
+  const frameId = selectedImplFrameId || selectedDesignFrameId;
+  if (!frameId) {
     figma.notify('No frame selected for annotations.', { error: true });
     return;
   }
 
-  const frame = await figma.getNodeByIdAsync(selectedFrameId);
+  const frame = await figma.getNodeByIdAsync(frameId);
   if (!frame || !('absoluteTransform' in frame)) return;
 
   const parentFrame = frame as FrameNode;
-  const parentPage = figma.currentPage;
 
-  // Create annotation frame next to the design
   const annotationFrame = figma.createFrame();
   annotationFrame.name = `QA Annotations - ${parentFrame.name} (${currentDesignMode} mode)`;
   annotationFrame.x = parentFrame.x + parentFrame.width + 40;
@@ -285,35 +267,31 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
   annotationFrame.paddingRight = 20;
   annotationFrame.itemSpacing = 12;
 
-  // Title
-  const title = figma.createText();
   await figma.loadFontAsync({ family: 'Inter', style: 'Bold' });
   await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
   await figma.loadFontAsync({ family: 'Inter', style: 'Medium' });
 
+  const title = figma.createText();
   title.fontName = { family: 'Inter', style: 'Bold' };
   title.characters = `Design QA Report - ${currentDesignMode.toUpperCase()} Mode`;
   title.fontSize = 16;
   title.fills = [{ type: 'SOLID', color: { r: 0.13, g: 0.13, b: 0.13 } }];
   annotationFrame.appendChild(title);
 
-  // Summary line
   const summaryText = figma.createText();
   summaryText.fontName = { family: 'Inter', style: 'Regular' };
   const critCount = issues.filter(i => i.severity === 'critical').length;
   const majCount = issues.filter(i => i.severity === 'major').length;
-  summaryText.characters = `Total: ${issues.length} issues | Critical: ${critCount} | Major: ${majCount}`;
+  summaryText.characters = `Total: ${issues.length} | Critical: ${critCount} | Major: ${majCount}`;
   summaryText.fontSize = 12;
   summaryText.fills = [{ type: 'SOLID', color: { r: 0.4, g: 0.4, b: 0.4 } }];
   annotationFrame.appendChild(summaryText);
 
-  // Separator
   const sep = figma.createRectangle();
   sep.resize(320, 1);
   sep.fills = [{ type: 'SOLID', color: { r: 0.88, g: 0.88, b: 0.88 } }];
   annotationFrame.appendChild(sep);
 
-  // Issues
   const severityColors: Record<string, { r: number; g: number; b: number }> = {
     critical: { r: 0.95, g: 0.28, b: 0.13 },
     major: { r: 0.95, g: 0.64, b: 0.05 },
@@ -321,7 +299,7 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
     info: { r: 0.6, g: 0.6, b: 0.6 },
   };
 
-  for (const issue of issues.slice(0, 30)) { // Limit to prevent huge annotation frames
+  for (const issue of issues.slice(0, 30)) {
     const issueFrame = figma.createFrame();
     issueFrame.name = `Issue: ${issue.title}`;
     issueFrame.layoutMode = 'VERTICAL';
@@ -333,10 +311,7 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
     issueFrame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
     issueFrame.cornerRadius = 6;
     issueFrame.strokeWeight = 1;
-    issueFrame.strokes = [{
-      type: 'SOLID',
-      color: severityColors[issue.severity] || severityColors.info,
-    }];
+    issueFrame.strokes = [{ type: 'SOLID', color: severityColors[issue.severity] || severityColors.info }];
     issueFrame.layoutSizingHorizontal = 'FILL';
 
     const issueSeverity = figma.createText();
@@ -367,10 +342,8 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
     annotationFrame.appendChild(issueFrame);
   }
 
-  // Resize to fit content
   annotationFrame.layoutSizingVertical = 'HUG';
 
-  // Also add visual markers on the original frame for issues with node references
   for (const issue of issues.filter(i => i.nodeId && (i.severity === 'critical' || i.severity === 'major'))) {
     const targetNode = await figma.getNodeByIdAsync(issue.nodeId!);
     if (targetNode && 'absoluteTransform' in targetNode) {
@@ -381,10 +354,7 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
       marker.x = absX - 6;
       marker.y = absY - 6;
       marker.resize(12, 12);
-      marker.fills = [{
-        type: 'SOLID',
-        color: severityColors[issue.severity],
-      }];
+      marker.fills = [{ type: 'SOLID', color: severityColors[issue.severity] }];
       marker.opacity = 0.8;
       marker.strokeWeight = 2;
       marker.strokes = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
@@ -392,6 +362,6 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
   }
 
   figma.viewport.scrollAndZoomIntoView([annotationFrame]);
-  figma.notify(`Created ${issues.length} annotations next to the design frame.`, { timeout: 5000 });
+  figma.notify(`${issues.length}개 어노테이션 생성 완료.`, { timeout: 5000 });
   figma.ui.postMessage({ type: 'export-complete', format: 'figma' });
 }
