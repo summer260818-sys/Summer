@@ -669,8 +669,9 @@
       return;
     }
     const node = selection[0];
-    if (node.type !== "FRAME" && node.type !== "COMPONENT" && node.type !== "GROUP") {
-      figma.notify("Please select a Frame, Component, or Group.", { error: true });
+    const validTypes = ["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "GROUP", "SECTION"];
+    if (!validTypes.includes(node.type)) {
+      figma.notify("Please select a Frame, Component, Instance, or Group.", { error: true });
       return;
     }
     selectedFrameId = node.id;
@@ -679,8 +680,8 @@
       frame: {
         id: node.id,
         name: node.name,
-        width: node.width,
-        height: node.height
+        width: "width" in node ? node.width : 0,
+        height: "height" in node ? node.height : 0
       }
     });
     figma.notify(`Selected: "${node.name}" (${Math.round(node.width)}x${Math.round(node.height)})`);
@@ -695,7 +696,8 @@
         return;
       }
       const node = await figma.getNodeByIdAsync(selectedFrameId);
-      if (!node || node.type !== "FRAME" && node.type !== "COMPONENT" && node.type !== "GROUP") {
+      const validTypes = ["FRAME", "COMPONENT", "COMPONENT_SET", "INSTANCE", "GROUP", "SECTION"];
+      if (!node || !validTypes.includes(node.type)) {
         figma.ui.postMessage({
           type: "comparison-error",
           error: "Selected frame no longer exists. Please select again."
