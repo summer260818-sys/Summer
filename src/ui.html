@@ -252,6 +252,18 @@
     .spacing-rect.actual { border-color: var(--error); color: var(--error); }
     .spacing-label { font-size: 9px; color: var(--text-muted); }
 
+    /* Visual diff region thumbnail */
+    .visual-region-preview {
+      margin-top: 4px; display: flex; gap: 8px; align-items: flex-start;
+    }
+    .visual-region-thumb {
+      border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+      max-width: 100%; image-rendering: pixelated;
+    }
+    .visual-region-label {
+      font-size: 10px; color: var(--text-muted); text-align: center; margin-top: 2px;
+    }
+
     /* ===== Empty / Loading States ===== */
     .empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted); }
     .empty-state .icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
@@ -338,7 +350,7 @@
   <!-- Check Filter Tabs -->
   <div class="check-tabs" id="checkTabs" style="display:none">
     <button class="check-tab active" data-filter="all" onclick="filterChecks('all')">All <span class="count" id="countAll">0</span></button>
-    <button class="check-tab" data-filter="color" onclick="filterChecks('color')">Color <span class="count" id="countColor">0</span></button>
+    <button class="check-tab" data-filter="visual" onclick="filterChecks('visual')">Visual <span class="count" id="countVisual">0</span></button>
     <button class="check-tab" data-filter="typography" onclick="filterChecks('typography')">Typo <span class="count" id="countTypo">0</span></button>
     <button class="check-tab" data-filter="spacing" onclick="filterChecks('spacing')">Spacing <span class="count" id="countSpacing">0</span></button>
     <button class="check-tab" data-filter="component" onclick="filterChecks('component')">Comp <span class="count" id="countComponent">0</span></button>
@@ -367,6 +379,10 @@
     <button class="export-btn primary" onclick="exportReport('figma')">Create Annotations</button>
   </div>
 
+  <!-- Hidden canvases for pixel comparison -->
+  <canvas id="canvasDesign" style="display:none"></canvas>
+  <canvas id="canvasImpl" style="display:none"></canvas>
+
   <script>
     // ===== State =====
     var state = {
@@ -379,6 +395,11 @@
       isComparing: false,
       expandedIdx: -1,
       markedNodes: {},
+      markedRegions: {},
+      implAbsX: 0,
+      implAbsY: 0,
+      designImageData: null,
+      implImageData: null,
     };
 
     // ===== Theme =====
@@ -415,6 +436,7 @@
       state.isComparing = true;
       state.expandedIdx = -1;
       state.markedNodes = {};
+      state.markedRegions = {};
 
       document.getElementById('emptyState').style.display = 'none';
       document.getElementById('loadingState').style.display = 'block';
@@ -424,6 +446,169 @@
       document.getElementById('exportBar').style.display = 'none';
 
       parent.postMessage({ pluginMessage: { type: 'run-comparison' } }, '*');
+    }
+
+    // ===== Pixel Comparison =====
+    function runPixelComparison(designBase64, implBase64, designW, designH, implW, implH) {
+      return new Promise(function(resolve) {
+        var designImg = new Image();
+        var implImg = new Image();
+        var loaded = 0;
+
+        function onBothLoaded() {
+          loaded++;
+          if (loaded < 2) return;
+
+          // Use the smaller common area
+          var w = Math.min(designImg.width, implImg.width);
+          var h = Math.min(designImg.height, implImg.height);
+
+          var cDesign = document.getElementById('canvasDesign');
+          var cImpl = document.getElementById('canvasImpl');
+          cDesign.width = w;
+          cDesign.height = h;
+          cImpl.width = w;
+          cImpl.height = h;
+
+          var ctxD = cDesign.getContext('2d');
+          var ctxI = cImpl.getContext('2d');
+          ctxD.drawImage(designImg, 0, 0);
+          ctxI.drawImage(implImg, 0, 0);
+
+          var dataD = ctxD.getImageData(0, 0, w, h).data;
+          var dataI = ctxI.getImageData(0, 0, w, h).data;
+
+          // Store image data for thumbnails
+          state.designImageData = { canvas: cDesign, ctx: ctxD, w: w, h: h };
+          state.implImageData = { canvas: cImpl, ctx: ctxI, w: w, h: h };
+
+          // Grid-based diff detection
+          var cellSize = 8;
+          var cols = Math.ceil(w / cellSize);
+          var rows = Math.ceil(h / cellSize);
+          var grid = new Uint8Array(rows * cols); // 0 = same, 1 = diff
+
+          var pixelThreshold = 30; // per-channel diff threshold
+          var cellDiffThreshold = 0.15; // 15% of pixels in a cell must differ
+
+          for (var gy = 0; gy < rows; gy++) {
+            for (var gx = 0; gx < cols; gx++) {
+              var startX = gx * cellSize;
+              var startY = gy * cellSize;
+              var endX = Math.min(startX + cellSize, w);
+              var endY = Math.min(startY + cellSize, h);
+              var totalPixels = (endX - startX) * (endY - startY);
+              var diffPixels = 0;
+
+              for (var py = startY; py < endY; py++) {
+                for (var px = startX; px < endX; px++) {
+                  var idx = (py * w + px) * 4;
+                  var dr = Math.abs(dataD[idx] - dataI[idx]);
+                  var dg = Math.abs(dataD[idx + 1] - dataI[idx + 1]);
+                  var db = Math.abs(dataD[idx + 2] - dataI[idx + 2]);
+                  if (dr > pixelThreshold || dg > pixelThreshold || db > pixelThreshold) {
+                    diffPixels++;
+                  }
+                }
+              }
+
+              if (diffPixels / totalPixels > cellDiffThreshold) {
+                grid[gy * cols + gx] = 1;
+              }
+            }
+          }
+
+          // BFS to group adjacent diff cells into regions
+          var visited = new Uint8Array(rows * cols);
+          var regions = [];
+
+          for (var ry = 0; ry < rows; ry++) {
+            for (var rx = 0; rx < cols; rx++) {
+              var ri = ry * cols + rx;
+              if (grid[ri] === 1 && !visited[ri]) {
+                // BFS
+                var queue = [{ x: rx, y: ry }];
+                visited[ri] = 1;
+                var minX = rx, maxX = rx, minY = ry, maxY = ry;
+                var cellCount = 0;
+
+                while (queue.length > 0) {
+                  var cur = queue.shift();
+                  cellCount++;
+                  if (cur.x < minX) minX = cur.x;
+                  if (cur.x > maxX) maxX = cur.x;
+                  if (cur.y < minY) minY = cur.y;
+                  if (cur.y > maxY) maxY = cur.y;
+
+                  // 8-directional neighbors
+                  var dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+                  for (var di = 0; di < dirs.length; di++) {
+                    var nx = cur.x + dirs[di][1];
+                    var ny = cur.y + dirs[di][0];
+                    if (nx >= 0 && nx < cols && ny >= 0 && ny < rows) {
+                      var ni = ny * cols + nx;
+                      if (grid[ni] === 1 && !visited[ni]) {
+                        visited[ni] = 1;
+                        queue.push({ x: nx, y: ny });
+                      }
+                    }
+                  }
+                }
+
+                // Only add regions that are at least 2 cells (avoid noise)
+                if (cellCount >= 2) {
+                  regions.push({
+                    x: minX * cellSize,
+                    y: minY * cellSize,
+                    width: (maxX - minX + 1) * cellSize,
+                    height: (maxY - minY + 1) * cellSize,
+                    cellCount: cellCount,
+                  });
+                }
+              }
+            }
+          }
+
+          // Sort by area descending
+          regions.sort(function(a, b) { return (b.width * b.height) - (a.width * a.height); });
+
+          // Check if sizes are different
+          var sizeIssues = [];
+          if (designImg.width !== implImg.width || designImg.height !== implImg.height) {
+            sizeIssues.push({
+              category: 'visual',
+              severity: 'major',
+              title: 'Frame size mismatch',
+              description: 'Design: ' + designImg.width + 'x' + designImg.height + 'px, Implementation: ' + implImg.width + 'x' + implImg.height + 'px',
+              suggestion: 'Ensure both frames have the same dimensions.',
+            });
+          }
+
+          // Convert regions to QAIssues
+          var visualIssues = sizeIssues.concat(regions.slice(0, 50).map(function(region, idx) {
+            var area = region.width * region.height;
+            var severity = area > 10000 ? 'critical' : area > 2000 ? 'major' : 'minor';
+            return {
+              category: 'visual',
+              severity: severity,
+              title: 'Visual difference #' + (idx + 1),
+              description: 'Region at (' + region.x + ', ' + region.y + ') size ' + region.width + 'x' + region.height + 'px (' + region.cellCount + ' diff cells)',
+              regionX: region.x,
+              regionY: region.y,
+              regionWidth: region.width,
+              regionHeight: region.height,
+              suggestion: 'Check this area for visual discrepancies between design and implementation.',
+            };
+          }));
+
+          resolve(visualIssues);
+        }
+
+        designImg.onload = onBothLoaded;
+        implImg.onload = onBothLoaded;
+        designImg.src = 'data:image/png;base64,' + designBase64;
+        implImg.src = 'data:image/png;base64,' + implBase64;
+      });
     }
 
     // ===== Filter =====
@@ -451,26 +636,39 @@
       if (!card) return;
 
       if (prevIdx === globalIdx) {
-        // Same card header clicked → collapse
+        // Same card header clicked -> collapse
         card.classList.remove('expanded', 'active');
         state.expandedIdx = -1;
-        // Clear highlight on canvas
         parent.postMessage({ pluginMessage: { type: 'clear-highlight' } }, '*');
       } else {
         // Expand new card
         card.classList.add('expanded', 'active');
         state.expandedIdx = globalIdx;
 
-        // Highlight on Figma canvas
         var issue = state.allIssues[globalIdx];
-        if (issue && issue.nodeId) {
-          parent.postMessage({
-            pluginMessage: {
-              type: 'highlight-on-canvas',
-              nodeId: issue.nodeId,
-              severity: issue.severity,
-            }
-          }, '*');
+        if (issue) {
+          if (issue.category === 'visual' && issue.regionX !== undefined) {
+            // Highlight region on Figma canvas
+            parent.postMessage({
+              pluginMessage: {
+                type: 'highlight-region',
+                regionX: issue.regionX,
+                regionY: issue.regionY,
+                regionWidth: issue.regionWidth,
+                regionHeight: issue.regionHeight,
+                severity: issue.severity,
+              }
+            }, '*');
+          } else if (issue.nodeId) {
+            // Highlight node on canvas
+            parent.postMessage({
+              pluginMessage: {
+                type: 'highlight-on-canvas',
+                nodeId: issue.nodeId,
+                severity: issue.severity,
+              }
+            }, '*');
+          }
         }
       }
     }
@@ -479,17 +677,57 @@
     function markIssue(globalIdx, event) {
       if (event) event.stopPropagation();
       var issue = state.allIssues[globalIdx];
-      if (!issue || !issue.nodeId) return;
-      if (state.markedNodes[issue.nodeId]) return;
+      if (!issue) return;
 
-      parent.postMessage({
-        pluginMessage: {
-          type: 'mark-on-canvas',
-          nodeId: issue.nodeId,
-          severity: issue.severity,
-          title: issue.title,
-        }
-      }, '*');
+      if (issue.category === 'visual' && issue.regionX !== undefined) {
+        var regionKey = issue.regionX + ',' + issue.regionY;
+        if (state.markedRegions[regionKey]) return;
+
+        parent.postMessage({
+          pluginMessage: {
+            type: 'mark-region',
+            regionX: issue.regionX,
+            regionY: issue.regionY,
+            regionWidth: issue.regionWidth,
+            regionHeight: issue.regionHeight,
+            severity: issue.severity,
+            title: issue.title,
+          }
+        }, '*');
+      } else if (issue.nodeId) {
+        if (state.markedNodes[issue.nodeId]) return;
+
+        parent.postMessage({
+          pluginMessage: {
+            type: 'mark-on-canvas',
+            nodeId: issue.nodeId,
+            severity: issue.severity,
+            title: issue.title,
+          }
+        }, '*');
+      }
+    }
+
+    // ===== Generate region thumbnail =====
+    function getRegionThumbnail(issue, which) {
+      if (!state.designImageData || !state.implImageData) return '';
+      var src = which === 'design' ? state.designImageData : state.implImageData;
+
+      var rx = Math.max(0, (issue.regionX || 0) - 4);
+      var ry = Math.max(0, (issue.regionY || 0) - 4);
+      var rw = Math.min((issue.regionWidth || 0) + 8, src.w - rx);
+      var rh = Math.min((issue.regionHeight || 0) + 8, src.h - ry);
+
+      if (rw <= 0 || rh <= 0) return '';
+
+      var tempCanvas = document.createElement('canvas');
+      var scale = Math.min(160 / rw, 80 / rh, 2);
+      tempCanvas.width = Math.round(rw * scale);
+      tempCanvas.height = Math.round(rh * scale);
+      var tmpCtx = tempCanvas.getContext('2d');
+      tmpCtx.imageSmoothingEnabled = false;
+      tmpCtx.drawImage(src.canvas, rx, ry, rw, rh, 0, 0, tempCanvas.width, tempCanvas.height);
+      return tempCanvas.toDataURL();
     }
 
     // ===== Render Issues =====
@@ -507,7 +745,14 @@
       list.innerHTML = filtered.map(function(issue) {
         var globalIdx = state.allIssues.indexOf(issue);
         var isExpanded = state.expandedIdx === globalIdx;
-        var isMarked = issue.nodeId && state.markedNodes[issue.nodeId];
+        var isMarked = false;
+        if (issue.category === 'visual' && issue.regionX !== undefined) {
+          isMarked = !!state.markedRegions[issue.regionX + ',' + issue.regionY];
+        } else if (issue.nodeId) {
+          isMarked = !!state.markedNodes[issue.nodeId];
+        }
+
+        var canMark = (issue.category === 'visual' && issue.regionX !== undefined) || !!issue.nodeId;
 
         return '<div class="issue-card' + (isExpanded ? ' expanded active' : '') + '" id="issue-' + globalIdx + '">' +
           '<div class="issue-header" onclick="toggleIssueHeader(' + globalIdx + ')">' +
@@ -518,7 +763,7 @@
           '</div>' +
           '<div class="issue-body">' +
             renderIssueBody(issue) +
-            (issue.nodeId
+            (canMark
               ? '<button class="mark-btn' + (isMarked ? ' marked' : '') + '" onclick="markIssue(' + globalIdx + ', event)">' +
                   (isMarked ? '&#10003; Marked' : '&#9998; Mark on Canvas') +
                 '</button>'
@@ -534,7 +779,7 @@
     }
 
     function catLabel(cat) {
-      return { color: 'Color', typography: 'Typo', spacing: 'Spacing', component: 'Comp', a11y: 'A11y' }[cat] || cat;
+      return { color: 'Color', typography: 'Typo', spacing: 'Spacing', component: 'Comp', a11y: 'A11y', visual: 'Visual' }[cat] || cat;
     }
 
     function renderIssueBody(issue) {
@@ -545,6 +790,20 @@
       }
       if (issue.nodeName) {
         html += '<div class="issue-detail"><div class="issue-detail-label">Element</div><div class="issue-detail-value">' + esc(issue.nodeName) + '</div></div>';
+      }
+
+      // Visual diff region thumbnails
+      if (issue.category === 'visual' && issue.regionX !== undefined && state.designImageData) {
+        var designThumb = getRegionThumbnail(issue, 'design');
+        var implThumb = getRegionThumbnail(issue, 'impl');
+        if (designThumb && implThumb) {
+          html += '<div class="issue-detail"><div class="issue-detail-label">Visual Comparison</div>' +
+            '<div class="visual-region-preview">' +
+              '<div style="text-align:center"><img class="visual-region-thumb" src="' + designThumb + '"><div class="visual-region-label">Design</div></div>' +
+              '<div class="color-arrow">&#8594;</div>' +
+              '<div style="text-align:center"><img class="visual-region-thumb" src="' + implThumb + '"><div class="visual-region-label">Impl</div></div>' +
+            '</div></div>';
+        }
       }
 
       // Color
@@ -573,9 +832,9 @@
       if (issue.category === 'spacing' && issue.expectedValue !== undefined && issue.actualValue !== undefined) {
         html += '<div class="issue-detail"><div class="issue-detail-label">Spacing Difference</div>' +
           '<div class="spacing-visual">' +
-            '<div class="spacing-box"><div class="spacing-rect expected">' + issue.expectedValue + 'px</div><div class="spacing-label">Design</div></div>' +
+            '<div class="spacing-box"><div class="spacing-rect expected">' + issue.expectedValue + 'px</div><div class="spacing-label">Expected</div></div>' +
             '<div class="color-arrow">&#8594;</div>' +
-            '<div class="spacing-box"><div class="spacing-rect actual">' + issue.actualValue + 'px</div><div class="spacing-label">Impl</div></div>' +
+            '<div class="spacing-box"><div class="spacing-rect actual">' + issue.actualValue + 'px</div><div class="spacing-label">Actual</div></div>' +
             '<div style="font-size:11px;color:var(--text-secondary)">Diff: ' + Math.abs(issue.expectedValue - issue.actualValue) + 'px</div>' +
           '</div></div>';
       }
@@ -630,14 +889,27 @@
     }
 
     function updateCounts() {
-      var counts = { all: state.allIssues.length, color: 0, typography: 0, spacing: 0, component: 0, a11y: 0 };
+      var counts = { all: state.allIssues.length, visual: 0, typography: 0, spacing: 0, component: 0, a11y: 0 };
       state.allIssues.forEach(function(i) { if (counts[i.category] !== undefined) counts[i.category]++; });
       document.getElementById('countAll').textContent = counts.all;
-      document.getElementById('countColor').textContent = counts.color;
+      document.getElementById('countVisual').textContent = counts.visual;
       document.getElementById('countTypo').textContent = counts.typography;
       document.getElementById('countSpacing').textContent = counts.spacing;
       document.getElementById('countComponent').textContent = counts.component;
       document.getElementById('countA11y').textContent = counts.a11y;
+    }
+
+    function computeSummary(issues) {
+      var s = { total: issues.length, critical: 0, major: 0, minor: 0, info: 0, passed: 0 };
+      issues.forEach(function(i) {
+        if (s[i.severity] !== undefined) s[i.severity]++;
+      });
+      // passed = categories with 0 issues
+      var categories = ['visual', 'typography', 'spacing', 'component', 'a11y'];
+      var issueCats = {};
+      issues.forEach(function(i) { issueCats[i.category] = true; });
+      s.passed = categories.filter(function(c) { return !issueCats[c]; }).length;
+      return s;
     }
 
     // ===== Export =====
@@ -667,18 +939,42 @@
           updateCompareButton();
           break;
 
-        case 'comparison-results':
-          state.allIssues = msg.issues;
-          state.isComparing = false;
-          state.expandedIdx = -1;
+        case 'comparison-data':
+          // Received from plugin: self-check issues + base64 images
+          state.implAbsX = msg.implAbsX || 0;
+          state.implAbsY = msg.implAbsY || 0;
 
-          document.getElementById('loadingState').style.display = 'none';
-          document.getElementById('checkTabs').style.display = 'flex';
-          document.getElementById('exportBar').style.display = 'flex';
+          var selfCheckIssues = msg.selfCheckIssues || [];
 
-          renderSummary(msg.summary);
-          updateCounts();
-          renderIssues();
+          // Run pixel comparison in UI
+          runPixelComparison(
+            msg.designImage, msg.implImage,
+            msg.designWidth, msg.designHeight,
+            msg.implWidth, msg.implHeight
+          ).then(function(visualIssues) {
+            // Combine visual + self-check issues
+            var allIssues = visualIssues.concat(selfCheckIssues);
+
+            // Sort by severity
+            var severityOrder = { critical: 0, major: 1, minor: 2, info: 3 };
+            allIssues.sort(function(a, b) {
+              return (severityOrder[a.severity] || 3) - (severityOrder[b.severity] || 3);
+            });
+
+            state.allIssues = allIssues;
+            state.isComparing = false;
+            state.expandedIdx = -1;
+
+            var summary = computeSummary(allIssues);
+
+            document.getElementById('loadingState').style.display = 'none';
+            document.getElementById('checkTabs').style.display = 'flex';
+            document.getElementById('exportBar').style.display = 'flex';
+
+            renderSummary(summary);
+            updateCounts();
+            renderIssues();
+          });
           break;
 
         case 'comparison-error':
@@ -691,6 +987,13 @@
         case 'mark-complete':
           if (msg.nodeId) {
             state.markedNodes[msg.nodeId] = true;
+            renderIssues();
+          }
+          break;
+
+        case 'mark-region-complete':
+          if (msg.regionX !== undefined) {
+            state.markedRegions[msg.regionX + ',' + msg.regionY] = true;
             renderIssues();
           }
           break;

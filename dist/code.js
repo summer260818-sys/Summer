@@ -24,81 +24,6 @@
     const b = Math.round(color.b * 255);
     return "#" + [r, g, b].map((c) => c.toString(16).padStart(2, "0")).join("");
   }
-  function rgbToLab(color) {
-    let r = color.r > 0.04045 ? Math.pow((color.r + 0.055) / 1.055, 2.4) : color.r / 12.92;
-    let g = color.g > 0.04045 ? Math.pow((color.g + 0.055) / 1.055, 2.4) : color.g / 12.92;
-    let b = color.b > 0.04045 ? Math.pow((color.b + 0.055) / 1.055, 2.4) : color.b / 12.92;
-    let x = (r * 0.4124564 + g * 0.3575761 + b * 0.1804375) / 0.95047;
-    let y = r * 0.2126729 + g * 0.7151522 + b * 0.072175;
-    let z = (r * 0.0193339 + g * 0.119192 + b * 0.9503041) / 1.08883;
-    const epsilon = 8856e-6;
-    const kappa = 903.3;
-    x = x > epsilon ? Math.pow(x, 1 / 3) : (kappa * x + 16) / 116;
-    y = y > epsilon ? Math.pow(y, 1 / 3) : (kappa * y + 16) / 116;
-    z = z > epsilon ? Math.pow(z, 1 / 3) : (kappa * z + 16) / 116;
-    return {
-      L: 116 * y - 16,
-      a: 500 * (x - y),
-      b: 200 * (y - z)
-    };
-  }
-  function deltaE2000(lab1, lab2) {
-    const { L: L1, a: a1, b: b1 } = lab1;
-    const { L: L2, a: a2, b: b2 } = lab2;
-    const avgL = (L1 + L2) / 2;
-    const c1 = Math.sqrt(a1 * a1 + b1 * b1);
-    const c2 = Math.sqrt(a2 * a2 + b2 * b2);
-    const avgC = (c1 + c2) / 2;
-    const g = 0.5 * (1 - Math.sqrt(Math.pow(avgC, 7) / (Math.pow(avgC, 7) + Math.pow(25, 7))));
-    const a1p = a1 * (1 + g);
-    const a2p = a2 * (1 + g);
-    const c1p = Math.sqrt(a1p * a1p + b1 * b1);
-    const c2p = Math.sqrt(a2p * a2p + b2 * b2);
-    let h1p = Math.atan2(b1, a1p) * 180 / Math.PI;
-    if (h1p < 0)
-      h1p += 360;
-    let h2p = Math.atan2(b2, a2p) * 180 / Math.PI;
-    if (h2p < 0)
-      h2p += 360;
-    const dLp = L2 - L1;
-    const dCp = c2p - c1p;
-    let dhp;
-    if (c1p * c2p === 0) {
-      dhp = 0;
-    } else if (Math.abs(h2p - h1p) <= 180) {
-      dhp = h2p - h1p;
-    } else if (h2p - h1p > 180) {
-      dhp = h2p - h1p - 360;
-    } else {
-      dhp = h2p - h1p + 360;
-    }
-    const dHp = 2 * Math.sqrt(c1p * c2p) * Math.sin(dhp * Math.PI / 360);
-    const avgLp = (L1 + L2) / 2;
-    const avgCp = (c1p + c2p) / 2;
-    let avgHp;
-    if (c1p * c2p === 0) {
-      avgHp = h1p + h2p;
-    } else if (Math.abs(h1p - h2p) <= 180) {
-      avgHp = (h1p + h2p) / 2;
-    } else if (h1p + h2p < 360) {
-      avgHp = (h1p + h2p + 360) / 2;
-    } else {
-      avgHp = (h1p + h2p - 360) / 2;
-    }
-    const T = 1 - 0.17 * Math.cos((avgHp - 30) * Math.PI / 180) + 0.24 * Math.cos(2 * avgHp * Math.PI / 180) + 0.32 * Math.cos((3 * avgHp + 6) * Math.PI / 180) - 0.2 * Math.cos((4 * avgHp - 63) * Math.PI / 180);
-    const sL = 1 + 0.015 * Math.pow(avgLp - 50, 2) / Math.sqrt(20 + Math.pow(avgLp - 50, 2));
-    const sC = 1 + 0.045 * avgCp;
-    const sH = 1 + 0.015 * avgCp * T;
-    const rT = -2 * Math.sqrt(Math.pow(avgCp, 7) / (Math.pow(avgCp, 7) + Math.pow(25, 7))) * Math.sin(60 * Math.exp(-Math.pow((avgHp - 275) / 25, 2)) * Math.PI / 180);
-    return Math.sqrt(
-      Math.pow(dLp / sL, 2) + Math.pow(dCp / sC, 2) + Math.pow(dHp / sH, 2) + rT * (dCp / sC) * (dHp / sH)
-    );
-  }
-  function compareColors(color1, color2) {
-    const lab1 = rgbToLab(color1);
-    const lab2 = rgbToLab(color2);
-    return deltaE2000(lab1, lab2);
-  }
   function relativeLuminance(color) {
     const linearize = (c) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
     return 0.2126 * linearize(color.r) + 0.7152 * linearize(color.g) + 0.0722 * linearize(color.b);
@@ -109,17 +34,6 @@
     const lighter = Math.max(l1, l2);
     const darker = Math.min(l1, l2);
     return (lighter + 0.05) / (darker + 0.05);
-  }
-  function classifyColorDiff(deltaE) {
-    if (deltaE < 1)
-      return "identical";
-    if (deltaE < 2)
-      return "imperceptible";
-    if (deltaE < 3.5)
-      return "noticeable";
-    if (deltaE < 5)
-      return "significant";
-    return "different";
   }
 
   // src/comparison-engine.ts
@@ -260,199 +174,25 @@
       "Heavy": 900
     };
     for (const [name, weight] of Object.entries(weights)) {
-      if (style.toLowerCase().includes(name.toLowerCase())) {
+      if (style.toLowerCase().includes(name.toLowerCase()))
         return weight;
-      }
     }
     return 400;
   }
-  function formatTypoProps(typo) {
-    return {
-      fontFamily: typo.fontFamily,
-      fontSize: `${typo.fontSize}px`,
-      fontWeight: String(typo.fontWeight),
-      lineHeight: typo.lineHeight ? `${typo.lineHeight}px` : "auto",
-      letterSpacing: `${typo.letterSpacing}px`
-    };
-  }
-  function runFrameComparison(designTokens, implTokens, designMode) {
+  function runSelfChecks(implTokens, designMode) {
     const issues = [];
-    issues.push(...crossCompareColors(designTokens.colors, implTokens.colors));
-    issues.push(...crossCompareTypography(designTokens.typography, implTokens.typography));
-    issues.push(...crossCompareSpacing(designTokens.spacing, implTokens.spacing));
     issues.push(...checkTypography(implTokens.typography));
     issues.push(...checkSpacing(implTokens.spacing));
     issues.push(...checkComponents(implTokens.components));
     issues.push(...checkAccessibility(implTokens.colors, implTokens.typography, designMode));
     const seen = /* @__PURE__ */ new Set();
-    const deduped = issues.filter((issue) => {
+    return issues.filter((issue) => {
       const key = `${issue.category}:${issue.title}`;
       if (seen.has(key))
         return false;
       seen.add(key);
       return true;
     });
-    const summary = {
-      total: deduped.length,
-      critical: deduped.filter((i) => i.severity === "critical").length,
-      major: deduped.filter((i) => i.severity === "major").length,
-      minor: deduped.filter((i) => i.severity === "minor").length,
-      info: deduped.filter((i) => i.severity === "info").length,
-      passed: countPassedChecks(implTokens, deduped)
-    };
-    return { issues: deduped, summary };
-  }
-  function crossCompareColors(designColors, implColors) {
-    const issues = [];
-    const implMap = /* @__PURE__ */ new Map();
-    for (const ic of implColors) {
-      const key = ic.nodeName.toLowerCase().trim();
-      if (!implMap.has(key))
-        implMap.set(key, []);
-      implMap.get(key).push(ic);
-    }
-    const checked = /* @__PURE__ */ new Set();
-    for (const dc of designColors) {
-      const key = dc.nodeName.toLowerCase().trim();
-      const implMatches = implMap.get(key);
-      if (!implMatches)
-        continue;
-      const ic = implMatches.find((c) => c.property === dc.property) || implMatches[0];
-      const checkKey = `${key}:${dc.property}`;
-      if (checked.has(checkKey))
-        continue;
-      checked.add(checkKey);
-      const diff = compareColors(dc.rgb, ic.rgb);
-      const classification = classifyColorDiff(diff);
-      if (classification === "significant" || classification === "different") {
-        issues.push({
-          category: "color",
-          severity: classification === "different" ? "critical" : "major",
-          title: `Color mismatch: "${dc.nodeName}"`,
-          description: `${dc.property} color differs between design and implementation. Delta E: ${diff.toFixed(1)}`,
-          nodeName: ic.nodeName,
-          nodeId: ic.nodeId,
-          expected: dc.hex,
-          actual: ic.hex,
-          deltaE: diff,
-          suggestion: `Change ${dc.property} from ${ic.hex} to ${dc.hex}`
-        });
-      } else if (classification === "noticeable") {
-        issues.push({
-          category: "color",
-          severity: "minor",
-          title: `Slight color diff: "${dc.nodeName}"`,
-          description: `${dc.property} has a minor color difference. Delta E: ${diff.toFixed(1)}`,
-          nodeName: ic.nodeName,
-          nodeId: ic.nodeId,
-          expected: dc.hex,
-          actual: ic.hex,
-          deltaE: diff,
-          suggestion: `Consider adjusting ${dc.property} to exactly ${dc.hex}`
-        });
-      }
-    }
-    const designHexSet = new Set(designColors.map((dc) => dc.hex.toLowerCase()));
-    const reportedHex = /* @__PURE__ */ new Set();
-    for (const ic of implColors) {
-      if (designHexSet.has(ic.hex.toLowerCase()) || reportedHex.has(ic.hex.toLowerCase()))
-        continue;
-      let closestDiff = Infinity;
-      for (const dc of designColors) {
-        const diff = compareColors(dc.rgb, ic.rgb);
-        if (diff < closestDiff)
-          closestDiff = diff;
-      }
-      if (closestDiff > 10 && designColors.length > 0) {
-        issues.push({
-          category: "color",
-          severity: "info",
-          title: `Non-design color: "${ic.nodeName}"`,
-          description: `Color ${ic.hex} on ${ic.property} is not in the design palette.`,
-          nodeName: ic.nodeName,
-          nodeId: ic.nodeId,
-          actual: ic.hex,
-          suggestion: "Verify this color is intentional or use a design system color."
-        });
-        reportedHex.add(ic.hex.toLowerCase());
-      }
-    }
-    return issues;
-  }
-  function crossCompareTypography(designTypo, implTypo) {
-    const issues = [];
-    const implMap = /* @__PURE__ */ new Map();
-    for (const it of implTypo) {
-      implMap.set(it.nodeName.toLowerCase().trim(), it);
-    }
-    for (const dt of designTypo) {
-      const key = dt.nodeName.toLowerCase().trim();
-      const it = implMap.get(key);
-      if (!it)
-        continue;
-      const diffs = [];
-      if (dt.fontFamily !== it.fontFamily) {
-        diffs.push(`font: ${dt.fontFamily} \u2192 ${it.fontFamily}`);
-      }
-      if (Math.round(dt.fontSize) !== Math.round(it.fontSize)) {
-        diffs.push(`size: ${dt.fontSize}px \u2192 ${it.fontSize}px`);
-      }
-      if (dt.fontWeight !== it.fontWeight) {
-        diffs.push(`weight: ${dt.fontWeight} \u2192 ${it.fontWeight}`);
-      }
-      if (dt.lineHeight !== null && it.lineHeight !== null && Math.abs(Math.round(dt.lineHeight) - Math.round(it.lineHeight)) >= 1) {
-        diffs.push(`line-height: ${Math.round(dt.lineHeight)}px \u2192 ${Math.round(it.lineHeight)}px`);
-      }
-      if (diffs.length > 0) {
-        const severity = diffs.some((d) => d.startsWith("font:") || d.startsWith("size:")) ? "major" : "minor";
-        issues.push({
-          category: "typography",
-          severity,
-          title: `Typography mismatch: "${dt.nodeName}"`,
-          description: diffs.join(", "),
-          nodeName: it.nodeName,
-          nodeId: it.nodeId,
-          designTypo: formatTypoProps(dt),
-          actualTypo: formatTypoProps(it),
-          suggestion: `Update typography to match design: ${diffs.join("; ")}`
-        });
-      }
-    }
-    return issues;
-  }
-  function crossCompareSpacing(designSpacing, implSpacing) {
-    const issues = [];
-    const implMap = /* @__PURE__ */ new Map();
-    for (const is_ of implSpacing) {
-      const key = is_.nodeName.toLowerCase().trim();
-      if (!implMap.has(key))
-        implMap.set(key, []);
-      implMap.get(key).push(is_);
-    }
-    for (const ds of designSpacing) {
-      const key = ds.nodeName.toLowerCase().trim();
-      const implSps = implMap.get(key);
-      if (!implSps)
-        continue;
-      const match = implSps.find((is_) => is_.type === ds.type && is_.direction === ds.direction);
-      if (!match)
-        continue;
-      const diff = Math.abs(ds.value - match.value);
-      if (diff >= 1) {
-        issues.push({
-          category: "spacing",
-          severity: diff > 4 ? "major" : "minor",
-          title: `Spacing mismatch: "${ds.nodeName}" ${ds.direction} ${ds.type}`,
-          description: `${ds.direction} ${ds.type}: design ${ds.value}px vs impl ${match.value}px`,
-          nodeName: match.nodeName,
-          nodeId: match.nodeId,
-          expectedValue: ds.value,
-          actualValue: match.value,
-          suggestion: `Change ${ds.type} ${ds.direction} from ${match.value}px to ${ds.value}px`
-        });
-      }
-    }
-    return issues;
   }
   function checkTypography(typography) {
     const issues = [];
@@ -462,26 +202,11 @@
         category: "typography",
         severity: "major",
         title: "Too many font families used",
-        description: `${fontFamilies.size} different font families detected. Design systems typically use 1-2.`,
+        description: `${fontFamilies.size} different font families detected.`,
         suggestion: `Consolidate fonts. Found: ${[...fontFamilies].join(", ")}`
       });
     }
-    const standardScales = [10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72];
     for (const typo of typography) {
-      const nearestStandard = standardScales.reduce(
-        (prev, curr) => Math.abs(curr - typo.fontSize) < Math.abs(prev - typo.fontSize) ? curr : prev
-      );
-      if (Math.abs(typo.fontSize - nearestStandard) > 0 && Math.abs(typo.fontSize - nearestStandard) <= 2) {
-        issues.push({
-          category: "typography",
-          severity: "minor",
-          title: `Non-standard font size: ${typo.fontSize}px`,
-          description: `"${typo.nodeName}" uses ${typo.fontSize}px, close to standard ${nearestStandard}px.`,
-          nodeName: typo.nodeName,
-          nodeId: typo.nodeId,
-          suggestion: `Consider using ${nearestStandard}px for consistency.`
-        });
-      }
       if (typo.lineHeight !== null) {
         const ratio = typo.lineHeight / typo.fontSize;
         if (ratio < 1.2) {
@@ -489,7 +214,7 @@
             category: "typography",
             severity: "major",
             title: `Tight line height: "${typo.nodeName}"`,
-            description: `Line height ratio ${ratio.toFixed(2)} (${typo.lineHeight}px / ${typo.fontSize}px). Minimum 1.2 recommended.`,
+            description: `Line height ratio ${ratio.toFixed(2)}. Minimum 1.2 recommended.`,
             nodeName: typo.nodeName,
             nodeId: typo.nodeId,
             suggestion: `Increase line height to at least ${Math.ceil(typo.fontSize * 1.2)}px.`
@@ -500,45 +225,25 @@
     return issues;
   }
   function checkSpacing(spacing) {
-    var _a, _b;
     const issues = [];
     const spacingScale = [0, 2, 4, 8, 12, 16, 20, 24, 32, 40, 48, 56, 64, 80, 96];
     for (const sp of spacing) {
-      const isOnScale = spacingScale.includes(sp.value);
-      if (!isOnScale && sp.value > 0) {
+      if (!spacingScale.includes(sp.value) && sp.value > 0) {
         const nearest = spacingScale.reduce(
           (prev, curr) => Math.abs(curr - sp.value) < Math.abs(prev - sp.value) ? curr : prev
         );
-        if (Math.abs(sp.value - nearest) <= 3) {
+        if (Math.abs(sp.value - nearest) <= 3 && Math.abs(sp.value - nearest) >= 1) {
           issues.push({
             category: "spacing",
             severity: "minor",
             title: `Off-scale ${sp.type}: "${sp.nodeName}"`,
-            description: `${sp.direction} ${sp.type} is ${sp.value}px, nearest scale value is ${nearest}px.`,
+            description: `${sp.direction} ${sp.type} is ${sp.value}px, nearest scale: ${nearest}px.`,
             nodeName: sp.nodeName,
             nodeId: sp.nodeId,
             expectedValue: nearest,
             actualValue: sp.value,
-            suggestion: `Adjust ${sp.type} to ${nearest}px to align with spacing scale.`
+            suggestion: `Adjust to ${nearest}px.`
           });
-        }
-      }
-      if (sp.type === "padding") {
-        const siblings = spacing.filter((s) => s.nodeId === sp.nodeId && s.type === "padding");
-        const horizontal = siblings.filter((s) => s.direction === "left" || s.direction === "right");
-        if (horizontal.length === 2 && horizontal[0].value !== horizontal[1].value) {
-          const existing = issues.find((i) => i.nodeId === sp.nodeId && i.title.includes("Asymmetric horizontal"));
-          if (!existing) {
-            issues.push({
-              category: "spacing",
-              severity: "minor",
-              title: `Asymmetric horizontal padding: "${sp.nodeName}"`,
-              description: `Left (${(_a = horizontal.find((h) => h.direction === "left")) == null ? void 0 : _a.value}px) differs from right (${(_b = horizontal.find((h) => h.direction === "right")) == null ? void 0 : _b.value}px).`,
-              nodeName: sp.nodeName,
-              nodeId: sp.nodeId,
-              suggestion: "Consider using symmetric horizontal padding."
-            });
-          }
         }
       }
     }
@@ -546,15 +251,15 @@
   }
   function checkComponents(components) {
     const issues = [];
-    const componentGroups = /* @__PURE__ */ new Map();
+    const groups = /* @__PURE__ */ new Map();
     for (const comp of components) {
       if (comp.mainComponentId) {
-        if (!componentGroups.has(comp.mainComponentId))
-          componentGroups.set(comp.mainComponentId, []);
-        componentGroups.get(comp.mainComponentId).push(comp);
+        if (!groups.has(comp.mainComponentId))
+          groups.set(comp.mainComponentId, []);
+        groups.get(comp.mainComponentId).push(comp);
       }
     }
-    for (const [, instances] of componentGroups) {
+    for (const [, instances] of groups) {
       if (instances.length < 2)
         continue;
       const widths = new Set(instances.map((i) => Math.round(i.width)));
@@ -576,69 +281,41 @@
         });
       }
     }
-    for (const comp of components) {
-      if (!comp.mainComponentId) {
-        issues.push({
-          category: "component",
-          severity: "info",
-          title: `Detached component: "${comp.name}"`,
-          description: "This instance may be detached from its main component.",
-          componentName: comp.name,
-          nodeId: comp.nodeId,
-          suggestion: "Reconnect to main component for consistency."
-        });
-      }
-    }
     return issues;
   }
   function checkAccessibility(colors, typography, designMode) {
     const issues = [];
     const textColors = colors.filter((c) => {
-      const name = c.nodeName.toLowerCase();
-      return name.includes("text") || name.includes("label") || name.includes("title") || name.includes("body") || name.includes("heading") || name.includes("caption");
+      const n = c.nodeName.toLowerCase();
+      return n.includes("text") || n.includes("label") || n.includes("title") || n.includes("body") || n.includes("heading") || n.includes("caption");
     });
     const bgColors = colors.filter((c) => {
-      const name = c.nodeName.toLowerCase();
-      return name.includes("background") || name.includes("bg") || name.includes("surface") || name.includes("card") || name.includes("container") || name.includes("frame");
+      const n = c.nodeName.toLowerCase();
+      return n.includes("background") || n.includes("bg") || n.includes("surface") || n.includes("card") || n.includes("container") || n.includes("frame");
     });
     const defaultBg = designMode === "dark" ? { r: 0.1, g: 0.1, b: 0.1 } : { r: 1, g: 1, b: 1 };
     const backgrounds = bgColors.length > 0 ? bgColors.map((c) => c.rgb) : [defaultBg];
-    for (const textColor of textColors) {
+    for (const tc of textColors) {
       for (const bg of backgrounds) {
-        const ratio = contrastRatio(textColor.rgb, bg);
-        const textHex = rgbToHex(textColor.rgb);
+        const ratio = contrastRatio(tc.rgb, bg);
+        const textHex = rgbToHex(tc.rgb);
         const bgHex = rgbToHex(bg);
-        const relatedTypo = typography.find((t) => t.nodeName === textColor.nodeName || t.nodeId === textColor.nodeId);
-        const isLargeText = relatedTypo && (relatedTypo.fontSize >= 18 || relatedTypo.fontSize >= 14 && relatedTypo.fontWeight >= 700);
-        const aaThreshold = isLargeText ? 3 : 4.5;
-        const aaaThreshold = isLargeText ? 4.5 : 7;
-        if (ratio < aaThreshold) {
+        const relTypo = typography.find((t) => t.nodeName === tc.nodeName || t.nodeId === tc.nodeId);
+        const isLarge = relTypo && (relTypo.fontSize >= 18 || relTypo.fontSize >= 14 && relTypo.fontWeight >= 700);
+        const aaT = isLarge ? 3 : 4.5;
+        if (ratio < aaT) {
           issues.push({
             category: "a11y",
             severity: "critical",
-            title: `Insufficient contrast: "${textColor.nodeName}"`,
-            description: `Contrast ${ratio.toFixed(2)}:1 fails WCAG AA (needs ${aaThreshold}:1).`,
-            nodeName: textColor.nodeName,
-            nodeId: textColor.nodeId,
+            title: `Insufficient contrast: "${tc.nodeName}"`,
+            description: `Contrast ${ratio.toFixed(2)}:1 fails WCAG AA (needs ${aaT}:1).`,
+            nodeName: tc.nodeName,
+            nodeId: tc.nodeId,
             contrastRatio: ratio,
             foreground: textHex,
             background: bgHex,
-            wcagCriteria: "WCAG 2.1 - 1.4.3 Contrast (Minimum)",
-            suggestion: `Increase contrast to at least ${aaThreshold}:1.`
-          });
-        } else if (ratio < aaaThreshold) {
-          issues.push({
-            category: "a11y",
-            severity: "minor",
-            title: `Contrast below AAA: "${textColor.nodeName}"`,
-            description: `Contrast ${ratio.toFixed(2)}:1 passes AA but fails AAA (needs ${aaaThreshold}:1).`,
-            nodeName: textColor.nodeName,
-            nodeId: textColor.nodeId,
-            contrastRatio: ratio,
-            foreground: textHex,
-            background: bgHex,
-            wcagCriteria: "WCAG 2.1 - 1.4.6 Contrast (Enhanced)",
-            suggestion: `For AAA compliance, increase contrast to ${aaaThreshold}:1.`
+            wcagCriteria: "WCAG 2.1 - 1.4.3",
+            suggestion: `Increase contrast to at least ${aaT}:1.`
           });
         }
       }
@@ -652,16 +329,11 @@
           description: `Font size ${typo.fontSize}px is below minimum 12px.`,
           nodeName: typo.nodeName,
           nodeId: typo.nodeId,
-          wcagCriteria: "WCAG 2.1 - 1.4.4 Resize Text",
           suggestion: "Increase font size to at least 12px."
         });
       }
     }
     return issues;
-  }
-  function countPassedChecks(tokens, issues) {
-    const totalChecks = tokens.colors.length + tokens.typography.length + tokens.spacing.length + tokens.components.length;
-    return Math.max(0, totalChecks - issues.length);
   }
 
   // src/code.ts
@@ -701,12 +373,31 @@
         if (msg.nodeId)
           await highlightOnCanvas(msg.nodeId, msg.severity || "info");
         break;
+      case "highlight-region":
+        await highlightRegion(
+          msg.regionX || 0,
+          msg.regionY || 0,
+          msg.regionWidth || 0,
+          msg.regionHeight || 0,
+          msg.severity || "critical"
+        );
+        break;
       case "clear-highlight":
         await clearTempHighlight();
         break;
       case "mark-on-canvas":
         if (msg.nodeId)
           await markOnCanvas(msg.nodeId, msg.severity || "info", msg.title || "");
+        break;
+      case "mark-region":
+        await markRegion(
+          msg.regionX || 0,
+          msg.regionY || 0,
+          msg.regionWidth || 0,
+          msg.regionHeight || 0,
+          msg.severity || "critical",
+          msg.title || ""
+        );
         break;
       case "export-report":
         if (msg.issues && msg.format)
@@ -769,22 +460,31 @@
         figma.ui.postMessage({ type: "comparison-error", error: "Implementation \uD504\uB808\uC784\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4." });
         return;
       }
-      const designTokens = await extractDesignTokens(designNode);
       const implTokens = await extractDesignTokens(implNode);
-      const { issues, summary } = runFrameComparison(
-        designTokens,
-        implTokens,
-        currentDesignMode
-      );
-      const severityOrder = { critical: 0, major: 1, minor: 2, info: 3 };
-      issues.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+      const selfCheckIssues = runSelfChecks(implTokens, currentDesignMode);
+      const exportSettings = {
+        format: "PNG",
+        constraint: { type: "SCALE", value: 1 }
+      };
+      const designBytes = await designNode.exportAsync(exportSettings);
+      const implBytes = await implNode.exportAsync(exportSettings);
+      const designBase64 = figma.base64Encode(designBytes);
+      const implBase64 = figma.base64Encode(implBytes);
+      const implAbsX = "absoluteTransform" in implNode ? implNode.absoluteTransform[0][2] : 0;
+      const implAbsY = "absoluteTransform" in implNode ? implNode.absoluteTransform[1][2] : 0;
       figma.ui.postMessage({
-        type: "comparison-results",
-        issues,
-        summary
+        type: "comparison-data",
+        selfCheckIssues,
+        designImage: designBase64,
+        implImage: implBase64,
+        designWidth: designNode.width,
+        designHeight: designNode.height,
+        implWidth: implNode.width,
+        implHeight: implNode.height,
+        implAbsX: Math.round(implAbsX),
+        implAbsY: Math.round(implAbsY)
       });
-      const notifMsg = summary.critical > 0 ? `${summary.total}\uAC1C \uC774\uC288 (${summary.critical}\uAC1C \uC2EC\uAC01)` : summary.total > 0 ? `${summary.total}\uAC1C \uC774\uC288 \uBC1C\uACAC` : "\uBAA8\uB4E0 \uAC80\uC0AC \uD1B5\uACFC!";
-      figma.notify(notifMsg, { timeout: 3e3, error: summary.critical > 0 });
+      figma.notify("\uD504\uB808\uC784 \uBD84\uC11D \uC911...", { timeout: 2e3 });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       figma.ui.postMessage({ type: "comparison-error", error: errorMessage });
@@ -813,6 +513,28 @@
     rect.cornerRadius = 2;
     tempHighlightId = rect.id;
     figma.viewport.scrollAndZoomIntoView([sceneNode]);
+  }
+  async function highlightRegion(regionX, regionY, regionWidth, regionHeight, severity) {
+    await clearTempHighlight();
+    if (!selectedImplFrameId)
+      return;
+    const implNode = await figma.getNodeByIdAsync(selectedImplFrameId);
+    if (!implNode || !("absoluteTransform" in implNode))
+      return;
+    const implAbsX = implNode.absoluteTransform[0][2];
+    const implAbsY = implNode.absoluteTransform[1][2];
+    const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.critical;
+    const rect = figma.createRectangle();
+    rect.name = "__QA_TEMP_HIGHLIGHT__";
+    rect.x = implAbsX + regionX - 4;
+    rect.y = implAbsY + regionY - 4;
+    rect.resize(regionWidth + 8, regionHeight + 8);
+    rect.fills = [{ type: "SOLID", color, opacity: 0.15 }];
+    rect.strokes = [{ type: "SOLID", color }];
+    rect.strokeWeight = 2;
+    rect.cornerRadius = 3;
+    tempHighlightId = rect.id;
+    figma.viewport.scrollAndZoomIntoView([rect]);
   }
   async function clearTempHighlight() {
     if (tempHighlightId) {
@@ -847,6 +569,29 @@
     figma.viewport.scrollAndZoomIntoView([sceneNode]);
     figma.notify(`Marked: ${title}`);
     figma.ui.postMessage({ type: "mark-complete", nodeId });
+  }
+  async function markRegion(regionX, regionY, regionWidth, regionHeight, severity, title) {
+    if (!selectedImplFrameId)
+      return;
+    const implNode = await figma.getNodeByIdAsync(selectedImplFrameId);
+    if (!implNode || !("absoluteTransform" in implNode))
+      return;
+    const implAbsX = implNode.absoluteTransform[0][2];
+    const implAbsY = implNode.absoluteTransform[1][2];
+    const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.critical;
+    const rect = figma.createRectangle();
+    rect.name = `QA: [${severity.toUpperCase()}] ${title}`;
+    rect.x = implAbsX + regionX - 4;
+    rect.y = implAbsY + regionY - 4;
+    rect.resize(regionWidth + 8, regionHeight + 8);
+    rect.fills = [{ type: "SOLID", color, opacity: 0.1 }];
+    rect.strokes = [{ type: "SOLID", color }];
+    rect.strokeWeight = 2;
+    rect.dashPattern = [6, 3];
+    rect.cornerRadius = 3;
+    figma.viewport.scrollAndZoomIntoView([rect]);
+    figma.notify(`Marked: ${title}`);
+    figma.ui.postMessage({ type: "mark-region-complete", regionX, regionY });
   }
   function handleExport(format, issues) {
     switch (format) {
@@ -985,22 +730,6 @@
       annotationFrame.appendChild(issueFrame);
     }
     annotationFrame.layoutSizingVertical = "HUG";
-    for (const issue of issues.filter((i) => i.nodeId && (i.severity === "critical" || i.severity === "major"))) {
-      const targetNode = await figma.getNodeByIdAsync(issue.nodeId);
-      if (targetNode && "absoluteTransform" in targetNode) {
-        const marker = figma.createEllipse();
-        marker.name = `QA: ${issue.severity} - ${issue.title}`;
-        const absX = targetNode.absoluteTransform[0][2];
-        const absY = targetNode.absoluteTransform[1][2];
-        marker.x = absX - 6;
-        marker.y = absY - 6;
-        marker.resize(12, 12);
-        marker.fills = [{ type: "SOLID", color: SEVERITY_COLORS[issue.severity] }];
-        marker.opacity = 0.8;
-        marker.strokeWeight = 2;
-        marker.strokes = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
-      }
-    }
     figma.viewport.scrollAndZoomIntoView([annotationFrame]);
     figma.notify(`${issues.length}\uAC1C \uC5B4\uB178\uD14C\uC774\uC158 \uC0DD\uC131 \uC644\uB8CC.`, { timeout: 5e3 });
     figma.ui.postMessage({ type: "export-complete", format: "figma" });

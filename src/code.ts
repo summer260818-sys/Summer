@@ -2,12 +2,13 @@
  * Design QA Inspector - Figma Plugin Main Code
  *
  * Compares Figma design frames with implementation frames.
+ * Exports both frames as PNG for pixel-level diff in the UI.
  * Highlights issues directly on the Figma canvas.
  */
 
 import {
   extractDesignTokens,
-  runFrameComparison,
+  runSelfChecks,
   QAIssue,
 } from './comparison-engine';
 
@@ -44,6 +45,10 @@ figma.ui.onmessage = async (msg: {
   nodeId?: string;
   severity?: string;
   title?: string;
+  regionX?: number;
+  regionY?: number;
+  regionWidth?: number;
+  regionHeight?: number;
 }) => {
   switch (msg.type) {
     case 'select-design-frame':
@@ -61,11 +66,26 @@ figma.ui.onmessage = async (msg: {
     case 'highlight-on-canvas':
       if (msg.nodeId) await highlightOnCanvas(msg.nodeId, msg.severity || 'info');
       break;
+    case 'highlight-region':
+      await highlightRegion(
+        msg.regionX || 0, msg.regionY || 0,
+        msg.regionWidth || 0, msg.regionHeight || 0,
+        msg.severity || 'critical'
+      );
+      break;
     case 'clear-highlight':
       await clearTempHighlight();
       break;
     case 'mark-on-canvas':
       if (msg.nodeId) await markOnCanvas(msg.nodeId, msg.severity || 'info', msg.title || '');
+      break;
+    case 'mark-region':
+      await markRegion(
+        msg.regionX || 0, msg.regionY || 0,
+        msg.regionWidth || 0, msg.regionHeight || 0,
+        msg.severity || 'critical',
+        msg.title || ''
+      );
       break;
     case 'export-report':
       if (msg.issues && msg.format) handleExport(msg.format, msg.issues);
@@ -129,7 +149,6 @@ async function handleComparison(): Promise<void> {
       return;
     }
 
-    // Clear any existing temp highlight
     await clearTempHighlight();
 
     const designNode = await figma.getNodeByIdAsync(selectedDesignFrameId);
@@ -144,34 +163,45 @@ async function handleComparison(): Promise<void> {
       return;
     }
 
-    // Extract tokens from both frames
-    const designTokens = await extractDesignTokens(designNode);
+    // Extract tokens from implementation frame for self-checks
     const implTokens = await extractDesignTokens(implNode);
 
-    // Run comparison
-    const { issues, summary } = runFrameComparison(
-      designTokens,
-      implTokens,
-      currentDesignMode
-    );
+    // Run self-checks on implementation tokens
+    const selfCheckIssues = runSelfChecks(implTokens, currentDesignMode);
 
-    // Sort by severity
-    const severityOrder: Record<string, number> = { critical: 0, major: 1, minor: 2, info: 3 };
-    issues.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+    // Export both frames as PNG at 1x scale for pixel comparison
+    const exportSettings: ExportSettings = {
+      format: 'PNG',
+      constraint: { type: 'SCALE', value: 1 },
+    };
+
+    const designBytes = await (designNode as SceneNode).exportAsync(exportSettings);
+    const implBytes = await (implNode as SceneNode).exportAsync(exportSettings);
+
+    // Convert to base64
+    const designBase64 = figma.base64Encode(designBytes);
+    const implBase64 = figma.base64Encode(implBytes);
+
+    // Get implementation frame absolute position (for region highlighting)
+    const implAbsX = 'absoluteTransform' in implNode
+      ? (implNode as SceneNode).absoluteTransform[0][2] : 0;
+    const implAbsY = 'absoluteTransform' in implNode
+      ? (implNode as SceneNode).absoluteTransform[1][2] : 0;
 
     figma.ui.postMessage({
-      type: 'comparison-results',
-      issues,
-      summary,
+      type: 'comparison-data',
+      selfCheckIssues,
+      designImage: designBase64,
+      implImage: implBase64,
+      designWidth: (designNode as any).width,
+      designHeight: (designNode as any).height,
+      implWidth: (implNode as any).width,
+      implHeight: (implNode as any).height,
+      implAbsX: Math.round(implAbsX),
+      implAbsY: Math.round(implAbsY),
     });
 
-    const notifMsg = summary.critical > 0
-      ? `${summary.total}개 이슈 (${summary.critical}개 심각)`
-      : summary.total > 0
-        ? `${summary.total}개 이슈 발견`
-        : '모든 검사 통과!';
-
-    figma.notify(notifMsg, { timeout: 3000, error: summary.critical > 0 });
+    figma.notify('프레임 분석 중...', { timeout: 2000 });
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -211,6 +241,38 @@ async function highlightOnCanvas(nodeId: string, severity: string): Promise<void
   figma.viewport.scrollAndZoomIntoView([sceneNode]);
 }
 
+// Region highlight for pixel-diff issues (on the impl frame)
+async function highlightRegion(
+  regionX: number, regionY: number,
+  regionWidth: number, regionHeight: number,
+  severity: string
+): Promise<void> {
+  await clearTempHighlight();
+
+  if (!selectedImplFrameId) return;
+  const implNode = await figma.getNodeByIdAsync(selectedImplFrameId);
+  if (!implNode || !('absoluteTransform' in implNode)) return;
+
+  const implAbsX = (implNode as SceneNode).absoluteTransform[0][2];
+  const implAbsY = (implNode as SceneNode).absoluteTransform[1][2];
+
+  const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.critical;
+
+  const rect = figma.createRectangle();
+  rect.name = '__QA_TEMP_HIGHLIGHT__';
+  rect.x = implAbsX + regionX - 4;
+  rect.y = implAbsY + regionY - 4;
+  rect.resize(regionWidth + 8, regionHeight + 8);
+  rect.fills = [{ type: 'SOLID', color, opacity: 0.15 }];
+  rect.strokes = [{ type: 'SOLID', color }];
+  rect.strokeWeight = 2;
+  rect.cornerRadius = 3;
+
+  tempHighlightId = rect.id;
+
+  figma.viewport.scrollAndZoomIntoView([rect]);
+}
+
 async function clearTempHighlight(): Promise<void> {
   if (tempHighlightId) {
     const node = await figma.getNodeByIdAsync(tempHighlightId);
@@ -236,7 +298,6 @@ async function markOnCanvas(nodeId: string, severity: string, title: string): Pr
 
   const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.info;
 
-  // Create marker rectangle
   const rect = figma.createRectangle();
   rect.name = `QA: [${severity.toUpperCase()}] ${title}`;
   rect.x = absX - 3;
@@ -251,6 +312,37 @@ async function markOnCanvas(nodeId: string, severity: string, title: string): Pr
   figma.viewport.scrollAndZoomIntoView([sceneNode]);
   figma.notify(`Marked: ${title}`);
   figma.ui.postMessage({ type: 'mark-complete', nodeId });
+}
+
+// Mark a pixel-diff region (persistent)
+async function markRegion(
+  regionX: number, regionY: number,
+  regionWidth: number, regionHeight: number,
+  severity: string, title: string
+): Promise<void> {
+  if (!selectedImplFrameId) return;
+  const implNode = await figma.getNodeByIdAsync(selectedImplFrameId);
+  if (!implNode || !('absoluteTransform' in implNode)) return;
+
+  const implAbsX = (implNode as SceneNode).absoluteTransform[0][2];
+  const implAbsY = (implNode as SceneNode).absoluteTransform[1][2];
+
+  const color = SEVERITY_COLORS[severity] || SEVERITY_COLORS.critical;
+
+  const rect = figma.createRectangle();
+  rect.name = `QA: [${severity.toUpperCase()}] ${title}`;
+  rect.x = implAbsX + regionX - 4;
+  rect.y = implAbsY + regionY - 4;
+  rect.resize(regionWidth + 8, regionHeight + 8);
+  rect.fills = [{ type: 'SOLID', color, opacity: 0.1 }];
+  rect.strokes = [{ type: 'SOLID', color }];
+  rect.strokeWeight = 2;
+  rect.dashPattern = [6, 3];
+  rect.cornerRadius = 3;
+
+  figma.viewport.scrollAndZoomIntoView([rect]);
+  figma.notify(`Marked: ${title}`);
+  figma.ui.postMessage({ type: 'mark-region-complete', regionX, regionY });
 }
 
 // ===== Export =====
@@ -403,23 +495,6 @@ async function createFigmaAnnotations(issues: QAIssue[]): Promise<void> {
   }
 
   annotationFrame.layoutSizingVertical = 'HUG';
-
-  for (const issue of issues.filter(i => i.nodeId && (i.severity === 'critical' || i.severity === 'major'))) {
-    const targetNode = await figma.getNodeByIdAsync(issue.nodeId!);
-    if (targetNode && 'absoluteTransform' in targetNode) {
-      const marker = figma.createEllipse();
-      marker.name = `QA: ${issue.severity} - ${issue.title}`;
-      const absX = (targetNode as SceneNode).absoluteTransform[0][2];
-      const absY = (targetNode as SceneNode).absoluteTransform[1][2];
-      marker.x = absX - 6;
-      marker.y = absY - 6;
-      marker.resize(12, 12);
-      marker.fills = [{ type: 'SOLID', color: SEVERITY_COLORS[issue.severity] }];
-      marker.opacity = 0.8;
-      marker.strokeWeight = 2;
-      marker.strokes = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
-    }
-  }
 
   figma.viewport.scrollAndZoomIntoView([annotationFrame]);
   figma.notify(`${issues.length}개 어노테이션 생성 완료.`, { timeout: 5000 });
