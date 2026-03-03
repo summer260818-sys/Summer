@@ -351,6 +351,7 @@
   <div class="check-tabs" id="checkTabs" style="display:none">
     <button class="check-tab active" data-filter="all" onclick="filterChecks('all')">All <span class="count" id="countAll">0</span></button>
     <button class="check-tab" data-filter="visual" onclick="filterChecks('visual')">Visual <span class="count" id="countVisual">0</span></button>
+    <button class="check-tab" data-filter="color" onclick="filterChecks('color')">Color <span class="count" id="countColor">0</span></button>
     <button class="check-tab" data-filter="typography" onclick="filterChecks('typography')">Typo <span class="count" id="countTypo">0</span></button>
     <button class="check-tab" data-filter="spacing" onclick="filterChecks('spacing')">Spacing <span class="count" id="countSpacing">0</span></button>
     <button class="check-tab" data-filter="component" onclick="filterChecks('component')">Comp <span class="count" id="countComponent">0</span></button>
@@ -448,12 +449,23 @@
       parent.postMessage({ pluginMessage: { type: 'run-comparison' } }, '*');
     }
 
-    // ===== Pixel Comparison =====
-    function runPixelComparison(designBase64, implBase64, designW, designH, implW, implH) {
+    // ===== Pixel Comparison (with text/image masking) =====
+    function isInMaskRect(px, py, maskRects) {
+      for (var i = 0; i < maskRects.length; i++) {
+        var r = maskRects[i];
+        if (px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function runPixelComparison(designBase64, implBase64, designW, designH, implW, implH, maskRects) {
       return new Promise(function(resolve) {
         var designImg = new Image();
         var implImg = new Image();
         var loaded = 0;
+        maskRects = maskRects || [];
 
         function onBothLoaded() {
           loaded++;
@@ -482,14 +494,32 @@
           state.designImageData = { canvas: cDesign, ctx: ctxD, w: w, h: h };
           state.implImageData = { canvas: cImpl, ctx: ctxI, w: w, h: h };
 
+          // Build mask bitmap for fast lookup (skip TEXT and IMAGE areas)
+          var maskBitmap = null;
+          if (maskRects.length > 0) {
+            maskBitmap = new Uint8Array(w * h);
+            for (var mi = 0; mi < maskRects.length; mi++) {
+              var mr = maskRects[mi];
+              var mx0 = Math.max(0, Math.floor(mr.x));
+              var my0 = Math.max(0, Math.floor(mr.y));
+              var mx1 = Math.min(w, Math.ceil(mr.x + mr.width));
+              var my1 = Math.min(h, Math.ceil(mr.y + mr.height));
+              for (var my = my0; my < my1; my++) {
+                for (var mx = mx0; mx < mx1; mx++) {
+                  maskBitmap[my * w + mx] = 1;
+                }
+              }
+            }
+          }
+
           // Grid-based diff detection
           var cellSize = 8;
           var cols = Math.ceil(w / cellSize);
           var rows = Math.ceil(h / cellSize);
-          var grid = new Uint8Array(rows * cols); // 0 = same, 1 = diff
+          var grid = new Uint8Array(rows * cols);
 
-          var pixelThreshold = 30; // per-channel diff threshold
-          var cellDiffThreshold = 0.15; // 15% of pixels in a cell must differ
+          var pixelThreshold = 30;
+          var cellDiffThreshold = 0.15;
 
           for (var gy = 0; gy < rows; gy++) {
             for (var gx = 0; gx < cols; gx++) {
@@ -497,11 +527,15 @@
               var startY = gy * cellSize;
               var endX = Math.min(startX + cellSize, w);
               var endY = Math.min(startY + cellSize, h);
-              var totalPixels = (endX - startX) * (endY - startY);
+              var totalPixels = 0;
               var diffPixels = 0;
 
               for (var py = startY; py < endY; py++) {
                 for (var px = startX; px < endX; px++) {
+                  // Skip masked pixels (text/image content)
+                  if (maskBitmap && maskBitmap[py * w + px]) continue;
+                  totalPixels++;
+
                   var idx = (py * w + px) * 4;
                   var dr = Math.abs(dataD[idx] - dataI[idx]);
                   var dg = Math.abs(dataD[idx + 1] - dataI[idx + 1]);
@@ -512,7 +546,7 @@
                 }
               }
 
-              if (diffPixels / totalPixels > cellDiffThreshold) {
+              if (totalPixels > 0 && diffPixels / totalPixels > cellDiffThreshold) {
                 grid[gy * cols + gx] = 1;
               }
             }
@@ -526,7 +560,6 @@
             for (var rx = 0; rx < cols; rx++) {
               var ri = ry * cols + rx;
               if (grid[ri] === 1 && !visited[ri]) {
-                // BFS
                 var queue = [{ x: rx, y: ry }];
                 visited[ri] = 1;
                 var minX = rx, maxX = rx, minY = ry, maxY = ry;
@@ -540,7 +573,6 @@
                   if (cur.y < minY) minY = cur.y;
                   if (cur.y > maxY) maxY = cur.y;
 
-                  // 8-directional neighbors
                   var dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
                   for (var di = 0; di < dirs.length; di++) {
                     var nx = cur.x + dirs[di][1];
@@ -555,7 +587,6 @@
                   }
                 }
 
-                // Only add regions that are at least 2 cells (avoid noise)
                 if (cellCount >= 2) {
                   regions.push({
                     x: minX * cellSize,
@@ -569,22 +600,19 @@
             }
           }
 
-          // Sort by area descending
           regions.sort(function(a, b) { return (b.width * b.height) - (a.width * a.height); });
 
-          // Check if sizes are different
           var sizeIssues = [];
           if (designImg.width !== implImg.width || designImg.height !== implImg.height) {
             sizeIssues.push({
               category: 'visual',
               severity: 'major',
               title: 'Frame size mismatch',
-              description: 'Design: ' + designImg.width + 'x' + designImg.height + 'px, Implementation: ' + implImg.width + 'x' + implImg.height + 'px',
+              description: 'Design: ' + designImg.width + 'x' + designImg.height + 'px, Impl: ' + implImg.width + 'x' + implImg.height + 'px',
               suggestion: 'Ensure both frames have the same dimensions.',
             });
           }
 
-          // Convert regions to QAIssues
           var visualIssues = sizeIssues.concat(regions.slice(0, 50).map(function(region, idx) {
             var area = region.width * region.height;
             var severity = area > 10000 ? 'critical' : area > 2000 ? 'major' : 'minor';
@@ -592,12 +620,12 @@
               category: 'visual',
               severity: severity,
               title: 'Visual difference #' + (idx + 1),
-              description: 'Region at (' + region.x + ', ' + region.y + ') size ' + region.width + 'x' + region.height + 'px (' + region.cellCount + ' diff cells)',
+              description: 'Region at (' + region.x + ', ' + region.y + ') size ' + region.width + 'x' + region.height + 'px',
               regionX: region.x,
               regionY: region.y,
               regionWidth: region.width,
               regionHeight: region.height,
-              suggestion: 'Check this area for visual discrepancies between design and implementation.',
+              suggestion: 'Check this area — may be icon/background/spacing difference.',
             };
           }));
 
@@ -889,10 +917,11 @@
     }
 
     function updateCounts() {
-      var counts = { all: state.allIssues.length, visual: 0, typography: 0, spacing: 0, component: 0, a11y: 0 };
+      var counts = { all: state.allIssues.length, visual: 0, color: 0, typography: 0, spacing: 0, component: 0, a11y: 0 };
       state.allIssues.forEach(function(i) { if (counts[i.category] !== undefined) counts[i.category]++; });
       document.getElementById('countAll').textContent = counts.all;
       document.getElementById('countVisual').textContent = counts.visual;
+      document.getElementById('countColor').textContent = counts.color;
       document.getElementById('countTypo').textContent = counts.typography;
       document.getElementById('countSpacing').textContent = counts.spacing;
       document.getElementById('countComponent').textContent = counts.component;
@@ -905,7 +934,7 @@
         if (s[i.severity] !== undefined) s[i.severity]++;
       });
       // passed = categories with 0 issues
-      var categories = ['visual', 'typography', 'spacing', 'component', 'a11y'];
+      var categories = ['visual', 'color', 'typography', 'spacing', 'component', 'a11y'];
       var issueCats = {};
       issues.forEach(function(i) { issueCats[i.category] = true; });
       s.passed = categories.filter(function(c) { return !issueCats[c]; }).length;
@@ -940,20 +969,23 @@
           break;
 
         case 'comparison-data':
-          // Received from plugin: self-check issues + base64 images
+          // Received from plugin: self-check issues + structural issues + base64 images + mask rects
           state.implAbsX = msg.implAbsX || 0;
           state.implAbsY = msg.implAbsY || 0;
 
           var selfCheckIssues = msg.selfCheckIssues || [];
+          var structuralIssues = msg.structuralIssues || [];
+          var maskRects = msg.maskRects || [];
 
-          // Run pixel comparison in UI
+          // Run pixel comparison with text/image masking
           runPixelComparison(
             msg.designImage, msg.implImage,
             msg.designWidth, msg.designHeight,
-            msg.implWidth, msg.implHeight
+            msg.implWidth, msg.implHeight,
+            maskRects
           ).then(function(visualIssues) {
-            // Combine visual + self-check issues
-            var allIssues = visualIssues.concat(selfCheckIssues);
+            // Combine: structural (text/icon/spacing cross-compare) + visual (pixel diff) + self-checks
+            var allIssues = structuralIssues.concat(visualIssues).concat(selfCheckIssues);
 
             // Sort by severity
             var severityOrder = { critical: 0, major: 1, minor: 2, info: 3 };

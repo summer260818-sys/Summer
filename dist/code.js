@@ -335,6 +335,284 @@
     }
     return issues;
   }
+  async function collectMaskRects(node, frameX, frameY) {
+    const textRects = [];
+    const imageRects = [];
+    async function traverse(n) {
+      if (n.visible === false)
+        return;
+      const absX = n.absoluteTransform[0][2];
+      const absY = n.absoluteTransform[1][2];
+      const relX = absX - frameX;
+      const relY = absY - frameY;
+      if (n.type === "TEXT") {
+        textRects.push({ x: relX, y: relY, width: n.width, height: n.height });
+      }
+      if ("fills" in n && Array.isArray(n.fills)) {
+        const hasImage = n.fills.some((f) => f.type === "IMAGE");
+        if (hasImage) {
+          imageRects.push({ x: relX, y: relY, width: n.width, height: n.height });
+        }
+      }
+      if ("children" in n) {
+        for (const child of n.children) {
+          await traverse(child);
+        }
+      }
+    }
+    await traverse(node);
+    return { textRects, imageRects };
+  }
+  async function collectTextProperties(node, frameX, frameY) {
+    const results = [];
+    async function traverse(n) {
+      if (n.visible === false)
+        return;
+      if (n.type === "TEXT") {
+        const textNode = n;
+        const absX = n.absoluteTransform[0][2];
+        const absY = n.absoluteTransform[1][2];
+        let fontSize = 0;
+        let fontWeight = 400;
+        if (typeof textNode.fontSize === "number")
+          fontSize = textNode.fontSize;
+        if (textNode.fontName !== figma.mixed)
+          fontWeight = getFontWeight(textNode.fontName.style);
+        let fillHex = "#000000";
+        let fillRgb = { r: 0, g: 0, b: 0 };
+        if (Array.isArray(textNode.fills)) {
+          const solidFill = textNode.fills.find((f) => f.type === "SOLID" && f.visible !== false);
+          if (solidFill) {
+            fillHex = rgbToHex(solidFill.color);
+            fillRgb = __spreadValues({}, solidFill.color);
+          }
+        }
+        results.push({
+          x: absX - frameX,
+          y: absY - frameY,
+          fontSize,
+          fontWeight,
+          fillHex,
+          fillRgb,
+          nodeName: n.name,
+          nodeId: n.id
+        });
+      }
+      if ("children" in n) {
+        for (const child of n.children) {
+          await traverse(child);
+        }
+      }
+    }
+    await traverse(node);
+    results.sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x);
+    return results;
+  }
+  async function collectIconProperties(node, frameX, frameY) {
+    const results = [];
+    async function traverse(n) {
+      if (n.visible === false)
+        return;
+      const isIcon = n.type === "VECTOR" || n.type === "INSTANCE" && n.width <= 48 && n.height <= 48 || n.type === "COMPONENT" && n.width <= 48 && n.height <= 48;
+      if (isIcon && "fills" in n && Array.isArray(n.fills)) {
+        const solidFill = n.fills.find((f) => f.type === "SOLID" && f.visible !== false);
+        if (solidFill) {
+          const absX = n.absoluteTransform[0][2];
+          const absY = n.absoluteTransform[1][2];
+          results.push({
+            x: absX - frameX,
+            y: absY - frameY,
+            width: n.width,
+            height: n.height,
+            fillHex: rgbToHex(solidFill.color),
+            fillRgb: __spreadValues({}, solidFill.color),
+            nodeName: n.name,
+            nodeId: n.id
+          });
+        }
+      }
+      if ("children" in n) {
+        for (const child of n.children) {
+          await traverse(child);
+        }
+      }
+    }
+    await traverse(node);
+    results.sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x);
+    return results;
+  }
+  async function collectSpacingProperties(node, frameX, frameY) {
+    const results = [];
+    async function traverse(n) {
+      if (n.visible === false)
+        return;
+      if ("layoutMode" in n && n.layoutMode !== "NONE") {
+        const frame = n;
+        const absX = n.absoluteTransform[0][2];
+        const absY = n.absoluteTransform[1][2];
+        results.push({
+          x: absX - frameX,
+          y: absY - frameY,
+          nodeName: n.name,
+          nodeId: n.id,
+          itemSpacing: Math.round(frame.itemSpacing || 0),
+          layoutMode: frame.layoutMode,
+          paddingTop: Math.round(frame.paddingTop || 0),
+          paddingRight: Math.round(frame.paddingRight || 0),
+          paddingBottom: Math.round(frame.paddingBottom || 0),
+          paddingLeft: Math.round(frame.paddingLeft || 0)
+        });
+      }
+      if ("children" in n) {
+        for (const child of n.children) {
+          await traverse(child);
+        }
+      }
+    }
+    await traverse(node);
+    results.sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x);
+    return results;
+  }
+  function crossCompareTexts(designTexts, implTexts) {
+    const issues = [];
+    const count = Math.min(designTexts.length, implTexts.length);
+    for (let i = 0; i < count; i++) {
+      const d = designTexts[i];
+      const imp = implTexts[i];
+      if (d.fontSize !== imp.fontSize) {
+        issues.push({
+          category: "typography",
+          severity: Math.abs(d.fontSize - imp.fontSize) >= 4 ? "critical" : "major",
+          title: `Text size mismatch: "${imp.nodeName}"`,
+          description: `Design: ${d.fontSize}px, Impl: ${imp.fontSize}px`,
+          nodeName: imp.nodeName,
+          nodeId: imp.nodeId,
+          expected: d.fontSize + "px",
+          actual: imp.fontSize + "px",
+          suggestion: `Change font size to ${d.fontSize}px`
+        });
+      }
+      if (d.fontWeight !== imp.fontWeight) {
+        issues.push({
+          category: "typography",
+          severity: "major",
+          title: `Font weight mismatch: "${imp.nodeName}"`,
+          description: `Design: ${d.fontWeight}, Impl: ${imp.fontWeight}`,
+          nodeName: imp.nodeName,
+          nodeId: imp.nodeId,
+          expected: String(d.fontWeight),
+          actual: String(imp.fontWeight),
+          suggestion: `Change font weight to ${d.fontWeight}`
+        });
+      }
+      if (d.fillHex !== imp.fillHex) {
+        const dr = Math.abs(d.fillRgb.r - imp.fillRgb.r);
+        const dg = Math.abs(d.fillRgb.g - imp.fillRgb.g);
+        const db = Math.abs(d.fillRgb.b - imp.fillRgb.b);
+        const dist = dr + dg + db;
+        if (dist > 0.05) {
+          issues.push({
+            category: "color",
+            severity: dist > 0.3 ? "critical" : "major",
+            title: `Text color mismatch: "${imp.nodeName}"`,
+            description: `Design: ${d.fillHex}, Impl: ${imp.fillHex}`,
+            nodeName: imp.nodeName,
+            nodeId: imp.nodeId,
+            expected: d.fillHex,
+            actual: imp.fillHex,
+            suggestion: `Change text color to ${d.fillHex}`
+          });
+        }
+      }
+    }
+    return issues;
+  }
+  function crossCompareIcons(designIcons, implIcons) {
+    const issues = [];
+    const count = Math.min(designIcons.length, implIcons.length);
+    for (let i = 0; i < count; i++) {
+      const d = designIcons[i];
+      const imp = implIcons[i];
+      if (d.fillHex !== imp.fillHex) {
+        const dr = Math.abs(d.fillRgb.r - imp.fillRgb.r);
+        const dg = Math.abs(d.fillRgb.g - imp.fillRgb.g);
+        const db = Math.abs(d.fillRgb.b - imp.fillRgb.b);
+        const dist = dr + dg + db;
+        if (dist > 0.05) {
+          issues.push({
+            category: "color",
+            severity: dist > 0.3 ? "critical" : "major",
+            title: `Icon color mismatch: "${imp.nodeName}"`,
+            description: `Design: ${d.fillHex}, Impl: ${imp.fillHex}`,
+            nodeName: imp.nodeName,
+            nodeId: imp.nodeId,
+            expected: d.fillHex,
+            actual: imp.fillHex,
+            suggestion: `Change icon color to ${d.fillHex}`
+          });
+        }
+      }
+      const dw = Math.abs(Math.round(d.width) - Math.round(imp.width));
+      const dh = Math.abs(Math.round(d.height) - Math.round(imp.height));
+      if (dw > 0 || dh > 0) {
+        issues.push({
+          category: "spacing",
+          severity: dw >= 4 || dh >= 4 ? "critical" : "major",
+          title: `Icon size mismatch: "${imp.nodeName}"`,
+          description: `Design: ${Math.round(d.width)}x${Math.round(d.height)}px, Impl: ${Math.round(imp.width)}x${Math.round(imp.height)}px`,
+          nodeName: imp.nodeName,
+          nodeId: imp.nodeId,
+          expected: `${Math.round(d.width)}x${Math.round(d.height)}px`,
+          actual: `${Math.round(imp.width)}x${Math.round(imp.height)}px`,
+          suggestion: `Resize icon to ${Math.round(d.width)}x${Math.round(d.height)}px`
+        });
+      }
+    }
+    return issues;
+  }
+  function crossCompareSpacing(designSpacing, implSpacing) {
+    const issues = [];
+    const count = Math.min(designSpacing.length, implSpacing.length);
+    for (let i = 0; i < count; i++) {
+      const d = designSpacing[i];
+      const imp = implSpacing[i];
+      if (d.itemSpacing !== imp.itemSpacing) {
+        issues.push({
+          category: "spacing",
+          severity: Math.abs(d.itemSpacing - imp.itemSpacing) >= 4 ? "critical" : "major",
+          title: `Gap mismatch: "${imp.nodeName}"`,
+          description: `Design: ${d.itemSpacing}px, Impl: ${imp.itemSpacing}px`,
+          nodeName: imp.nodeName,
+          nodeId: imp.nodeId,
+          expectedValue: d.itemSpacing,
+          actualValue: imp.itemSpacing,
+          suggestion: `Change gap to ${d.itemSpacing}px`
+        });
+      }
+      const paddings = [
+        { dir: "top", dv: d.paddingTop, iv: imp.paddingTop },
+        { dir: "right", dv: d.paddingRight, iv: imp.paddingRight },
+        { dir: "bottom", dv: d.paddingBottom, iv: imp.paddingBottom },
+        { dir: "left", dv: d.paddingLeft, iv: imp.paddingLeft }
+      ];
+      for (const p of paddings) {
+        if (p.dv !== p.iv) {
+          issues.push({
+            category: "spacing",
+            severity: Math.abs(p.dv - p.iv) >= 4 ? "critical" : "major",
+            title: `Padding-${p.dir} mismatch: "${imp.nodeName}"`,
+            description: `Design: ${p.dv}px, Impl: ${p.iv}px`,
+            nodeName: imp.nodeName,
+            nodeId: imp.nodeId,
+            expectedValue: p.dv,
+            actualValue: p.iv,
+            suggestion: `Change padding-${p.dir} to ${p.dv}px`
+          });
+        }
+      }
+    }
+    return issues;
+  }
 
   // src/code.ts
   figma.showUI(__html__, {
@@ -460,8 +738,33 @@
         figma.ui.postMessage({ type: "comparison-error", error: "Implementation \uD504\uB808\uC784\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4." });
         return;
       }
+      const designAbsX = designNode.absoluteTransform[0][2];
+      const designAbsY = designNode.absoluteTransform[1][2];
+      const implAbsX = implNode.absoluteTransform[0][2];
+      const implAbsY = implNode.absoluteTransform[1][2];
       const implTokens = await extractDesignTokens(implNode);
       const selfCheckIssues = runSelfChecks(implTokens, currentDesignMode);
+      const [designTexts, implTexts] = await Promise.all([
+        collectTextProperties(designNode, designAbsX, designAbsY),
+        collectTextProperties(implNode, implAbsX, implAbsY)
+      ]);
+      const [designIcons, implIcons] = await Promise.all([
+        collectIconProperties(designNode, designAbsX, designAbsY),
+        collectIconProperties(implNode, implAbsX, implAbsY)
+      ]);
+      const [designSpacingProps, implSpacingProps] = await Promise.all([
+        collectSpacingProperties(designNode, designAbsX, designAbsY),
+        collectSpacingProperties(implNode, implAbsX, implAbsY)
+      ]);
+      const structuralIssues = [
+        ...crossCompareTexts(designTexts, implTexts),
+        ...crossCompareIcons(designIcons, implIcons),
+        ...crossCompareSpacing(designSpacingProps, implSpacingProps)
+      ];
+      const [designMasks, implMasks] = await Promise.all([
+        collectMaskRects(designNode, designAbsX, designAbsY),
+        collectMaskRects(implNode, implAbsX, implAbsY)
+      ]);
       const exportSettings = {
         format: "PNG",
         constraint: { type: "SCALE", value: 1 }
@@ -470,11 +773,10 @@
       const implBytes = await implNode.exportAsync(exportSettings);
       const designBase64 = figma.base64Encode(designBytes);
       const implBase64 = figma.base64Encode(implBytes);
-      const implAbsX = "absoluteTransform" in implNode ? implNode.absoluteTransform[0][2] : 0;
-      const implAbsY = "absoluteTransform" in implNode ? implNode.absoluteTransform[1][2] : 0;
       figma.ui.postMessage({
         type: "comparison-data",
         selfCheckIssues,
+        structuralIssues,
         designImage: designBase64,
         implImage: implBase64,
         designWidth: designNode.width,
@@ -482,7 +784,14 @@
         implWidth: implNode.width,
         implHeight: implNode.height,
         implAbsX: Math.round(implAbsX),
-        implAbsY: Math.round(implAbsY)
+        implAbsY: Math.round(implAbsY),
+        // Mask rects: union of both frames' text/image areas
+        maskRects: [
+          ...designMasks.textRects,
+          ...designMasks.imageRects,
+          ...implMasks.textRects,
+          ...implMasks.imageRects
+        ]
       });
       figma.notify("\uD504\uB808\uC784 \uBD84\uC11D \uC911...", { timeout: 2e3 });
     } catch (error) {
