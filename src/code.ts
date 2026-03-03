@@ -9,6 +9,13 @@
 import {
   extractDesignTokens,
   runSelfChecks,
+  collectMaskRects,
+  collectTextProperties,
+  collectIconProperties,
+  collectSpacingProperties,
+  crossCompareTexts,
+  crossCompareIcons,
+  crossCompareSpacing,
   QAIssue,
 } from './comparison-engine';
 
@@ -163,11 +170,41 @@ async function handleComparison(): Promise<void> {
       return;
     }
 
+    // Get frame absolute positions
+    const designAbsX = (designNode as SceneNode).absoluteTransform[0][2];
+    const designAbsY = (designNode as SceneNode).absoluteTransform[1][2];
+    const implAbsX = (implNode as SceneNode).absoluteTransform[0][2];
+    const implAbsY = (implNode as SceneNode).absoluteTransform[1][2];
+
     // Extract tokens from implementation frame for self-checks
     const implTokens = await extractDesignTokens(implNode);
-
-    // Run self-checks on implementation tokens
     const selfCheckIssues = runSelfChecks(implTokens, currentDesignMode);
+
+    // Cross-frame structural comparison (text size/color, icon color/size, spacing)
+    const [designTexts, implTexts] = await Promise.all([
+      collectTextProperties(designNode as SceneNode, designAbsX, designAbsY),
+      collectTextProperties(implNode as SceneNode, implAbsX, implAbsY),
+    ]);
+    const [designIcons, implIcons] = await Promise.all([
+      collectIconProperties(designNode as SceneNode, designAbsX, designAbsY),
+      collectIconProperties(implNode as SceneNode, implAbsX, implAbsY),
+    ]);
+    const [designSpacingProps, implSpacingProps] = await Promise.all([
+      collectSpacingProperties(designNode as SceneNode, designAbsX, designAbsY),
+      collectSpacingProperties(implNode as SceneNode, implAbsX, implAbsY),
+    ]);
+
+    const structuralIssues: QAIssue[] = [
+      ...crossCompareTexts(designTexts, implTexts),
+      ...crossCompareIcons(designIcons, implIcons),
+      ...crossCompareSpacing(designSpacingProps, implSpacingProps),
+    ];
+
+    // Collect mask rects (TEXT and IMAGE areas to exclude from pixel diff)
+    const [designMasks, implMasks] = await Promise.all([
+      collectMaskRects(designNode as SceneNode, designAbsX, designAbsY),
+      collectMaskRects(implNode as SceneNode, implAbsX, implAbsY),
+    ]);
 
     // Export both frames as PNG at 1x scale for pixel comparison
     const exportSettings: ExportSettings = {
@@ -178,19 +215,13 @@ async function handleComparison(): Promise<void> {
     const designBytes = await (designNode as SceneNode).exportAsync(exportSettings);
     const implBytes = await (implNode as SceneNode).exportAsync(exportSettings);
 
-    // Convert to base64
     const designBase64 = figma.base64Encode(designBytes);
     const implBase64 = figma.base64Encode(implBytes);
-
-    // Get implementation frame absolute position (for region highlighting)
-    const implAbsX = 'absoluteTransform' in implNode
-      ? (implNode as SceneNode).absoluteTransform[0][2] : 0;
-    const implAbsY = 'absoluteTransform' in implNode
-      ? (implNode as SceneNode).absoluteTransform[1][2] : 0;
 
     figma.ui.postMessage({
       type: 'comparison-data',
       selfCheckIssues,
+      structuralIssues,
       designImage: designBase64,
       implImage: implBase64,
       designWidth: (designNode as any).width,
@@ -199,6 +230,13 @@ async function handleComparison(): Promise<void> {
       implHeight: (implNode as any).height,
       implAbsX: Math.round(implAbsX),
       implAbsY: Math.round(implAbsY),
+      // Mask rects: union of both frames' text/image areas
+      maskRects: [
+        ...designMasks.textRects,
+        ...designMasks.imageRects,
+        ...implMasks.textRects,
+        ...implMasks.imageRects,
+      ],
     });
 
     figma.notify('프레임 분석 중...', { timeout: 2000 });

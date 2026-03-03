@@ -1,7 +1,8 @@
 /**
  * Design QA Comparison Engine
- * Self-checks on implementation tokens.
- * Visual pixel diff is handled in the UI.
+ * - Self-checks on implementation tokens
+ * - Cross-frame comparison: text size/color, icon color/size, spacing
+ * - Mask rect collection for pixel diff (exclude text/image content)
  */
 
 import {
@@ -378,5 +379,378 @@ function checkAccessibility(
       });
     }
   }
+  return issues;
+}
+
+// ===== Mask Rects (for pixel diff - exclude text/image content) =====
+
+export interface MaskRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export async function collectMaskRects(
+  node: SceneNode,
+  frameX: number,
+  frameY: number
+): Promise<{ textRects: MaskRect[]; imageRects: MaskRect[] }> {
+  const textRects: MaskRect[] = [];
+  const imageRects: MaskRect[] = [];
+
+  async function traverse(n: SceneNode): Promise<void> {
+    if (n.visible === false) return;
+
+    const absX = n.absoluteTransform[0][2];
+    const absY = n.absoluteTransform[1][2];
+    const relX = absX - frameX;
+    const relY = absY - frameY;
+
+    if (n.type === 'TEXT') {
+      textRects.push({ x: relX, y: relY, width: n.width, height: n.height });
+    }
+
+    if ('fills' in n && Array.isArray(n.fills)) {
+      const hasImage = (n.fills as Paint[]).some(f => f.type === 'IMAGE');
+      if (hasImage) {
+        imageRects.push({ x: relX, y: relY, width: n.width, height: n.height });
+      }
+    }
+
+    if ('children' in n) {
+      for (const child of (n as FrameNode).children) {
+        await traverse(child);
+      }
+    }
+  }
+
+  await traverse(node);
+  return { textRects, imageRects };
+}
+
+// ===== Cross-Frame Comparison Types =====
+
+export interface TextPropertyInfo {
+  x: number;
+  y: number;
+  fontSize: number;
+  fontWeight: number;
+  fillHex: string;
+  fillRgb: RGB;
+  nodeName: string;
+  nodeId: string;
+}
+
+export interface IconPropertyInfo {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fillHex: string;
+  fillRgb: RGB;
+  nodeName: string;
+  nodeId: string;
+}
+
+export interface SpacingPropertyInfo {
+  x: number;
+  y: number;
+  nodeName: string;
+  nodeId: string;
+  itemSpacing: number;
+  layoutMode: string;
+  paddingTop: number;
+  paddingRight: number;
+  paddingBottom: number;
+  paddingLeft: number;
+}
+
+// ===== Collect Properties for Cross-Comparison =====
+
+export async function collectTextProperties(
+  node: SceneNode, frameX: number, frameY: number
+): Promise<TextPropertyInfo[]> {
+  const results: TextPropertyInfo[] = [];
+
+  async function traverse(n: SceneNode): Promise<void> {
+    if (n.visible === false) return;
+
+    if (n.type === 'TEXT') {
+      const textNode = n as TextNode;
+      const absX = n.absoluteTransform[0][2];
+      const absY = n.absoluteTransform[1][2];
+
+      let fontSize = 0;
+      let fontWeight = 400;
+      if (typeof textNode.fontSize === 'number') fontSize = textNode.fontSize;
+      if (textNode.fontName !== figma.mixed) fontWeight = getFontWeight((textNode.fontName as FontName).style);
+
+      let fillHex = '#000000';
+      let fillRgb: RGB = { r: 0, g: 0, b: 0 };
+      if (Array.isArray(textNode.fills)) {
+        const solidFill = (textNode.fills as Paint[]).find(f => f.type === 'SOLID' && f.visible !== false) as SolidPaint | undefined;
+        if (solidFill) {
+          fillHex = rgbToHex(solidFill.color);
+          fillRgb = { ...solidFill.color };
+        }
+      }
+
+      results.push({
+        x: absX - frameX, y: absY - frameY,
+        fontSize, fontWeight, fillHex, fillRgb,
+        nodeName: n.name, nodeId: n.id,
+      });
+    }
+
+    if ('children' in n) {
+      for (const child of (n as FrameNode).children) {
+        await traverse(child);
+      }
+    }
+  }
+
+  await traverse(node);
+  results.sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x);
+  return results;
+}
+
+export async function collectIconProperties(
+  node: SceneNode, frameX: number, frameY: number
+): Promise<IconPropertyInfo[]> {
+  const results: IconPropertyInfo[] = [];
+
+  async function traverse(n: SceneNode): Promise<void> {
+    if (n.visible === false) return;
+
+    // Icons: VECTOR nodes, or small INSTANCE/COMPONENT (<=48px)
+    const isIcon = n.type === 'VECTOR' ||
+      (n.type === 'INSTANCE' && n.width <= 48 && n.height <= 48) ||
+      (n.type === 'COMPONENT' && n.width <= 48 && n.height <= 48);
+
+    if (isIcon && 'fills' in n && Array.isArray(n.fills)) {
+      const solidFill = (n.fills as Paint[]).find(f => f.type === 'SOLID' && f.visible !== false) as SolidPaint | undefined;
+      if (solidFill) {
+        const absX = n.absoluteTransform[0][2];
+        const absY = n.absoluteTransform[1][2];
+        results.push({
+          x: absX - frameX, y: absY - frameY,
+          width: n.width, height: n.height,
+          fillHex: rgbToHex(solidFill.color),
+          fillRgb: { ...solidFill.color },
+          nodeName: n.name, nodeId: n.id,
+        });
+      }
+    }
+
+    if ('children' in n) {
+      for (const child of (n as FrameNode).children) {
+        await traverse(child);
+      }
+    }
+  }
+
+  await traverse(node);
+  results.sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x);
+  return results;
+}
+
+export async function collectSpacingProperties(
+  node: SceneNode, frameX: number, frameY: number
+): Promise<SpacingPropertyInfo[]> {
+  const results: SpacingPropertyInfo[] = [];
+
+  async function traverse(n: SceneNode): Promise<void> {
+    if (n.visible === false) return;
+
+    if ('layoutMode' in n && (n as FrameNode).layoutMode !== 'NONE') {
+      const frame = n as FrameNode;
+      const absX = n.absoluteTransform[0][2];
+      const absY = n.absoluteTransform[1][2];
+      results.push({
+        x: absX - frameX, y: absY - frameY,
+        nodeName: n.name, nodeId: n.id,
+        itemSpacing: Math.round(frame.itemSpacing || 0),
+        layoutMode: frame.layoutMode,
+        paddingTop: Math.round(frame.paddingTop || 0),
+        paddingRight: Math.round(frame.paddingRight || 0),
+        paddingBottom: Math.round(frame.paddingBottom || 0),
+        paddingLeft: Math.round(frame.paddingLeft || 0),
+      });
+    }
+
+    if ('children' in n) {
+      for (const child of (n as FrameNode).children) {
+        await traverse(child);
+      }
+    }
+  }
+
+  await traverse(node);
+  results.sort((a, b) => a.y !== b.y ? a.y - b.y : a.x - b.x);
+  return results;
+}
+
+// ===== Cross-Frame Comparisons =====
+
+export function crossCompareTexts(
+  designTexts: TextPropertyInfo[],
+  implTexts: TextPropertyInfo[]
+): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const count = Math.min(designTexts.length, implTexts.length);
+
+  for (let i = 0; i < count; i++) {
+    const d = designTexts[i];
+    const imp = implTexts[i];
+
+    // Compare font size
+    if (d.fontSize !== imp.fontSize) {
+      issues.push({
+        category: 'typography',
+        severity: Math.abs(d.fontSize - imp.fontSize) >= 4 ? 'critical' : 'major',
+        title: `Text size mismatch: "${imp.nodeName}"`,
+        description: `Design: ${d.fontSize}px, Impl: ${imp.fontSize}px`,
+        nodeName: imp.nodeName, nodeId: imp.nodeId,
+        expected: d.fontSize + 'px', actual: imp.fontSize + 'px',
+        suggestion: `Change font size to ${d.fontSize}px`,
+      });
+    }
+
+    // Compare font weight
+    if (d.fontWeight !== imp.fontWeight) {
+      issues.push({
+        category: 'typography',
+        severity: 'major',
+        title: `Font weight mismatch: "${imp.nodeName}"`,
+        description: `Design: ${d.fontWeight}, Impl: ${imp.fontWeight}`,
+        nodeName: imp.nodeName, nodeId: imp.nodeId,
+        expected: String(d.fontWeight), actual: String(imp.fontWeight),
+        suggestion: `Change font weight to ${d.fontWeight}`,
+      });
+    }
+
+    // Compare text color
+    if (d.fillHex !== imp.fillHex) {
+      const dr = Math.abs(d.fillRgb.r - imp.fillRgb.r);
+      const dg = Math.abs(d.fillRgb.g - imp.fillRgb.g);
+      const db = Math.abs(d.fillRgb.b - imp.fillRgb.b);
+      const dist = dr + dg + db;
+
+      if (dist > 0.05) {
+        issues.push({
+          category: 'color',
+          severity: dist > 0.3 ? 'critical' : 'major',
+          title: `Text color mismatch: "${imp.nodeName}"`,
+          description: `Design: ${d.fillHex}, Impl: ${imp.fillHex}`,
+          nodeName: imp.nodeName, nodeId: imp.nodeId,
+          expected: d.fillHex, actual: imp.fillHex,
+          suggestion: `Change text color to ${d.fillHex}`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+export function crossCompareIcons(
+  designIcons: IconPropertyInfo[],
+  implIcons: IconPropertyInfo[]
+): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const count = Math.min(designIcons.length, implIcons.length);
+
+  for (let i = 0; i < count; i++) {
+    const d = designIcons[i];
+    const imp = implIcons[i];
+
+    // Compare icon color
+    if (d.fillHex !== imp.fillHex) {
+      const dr = Math.abs(d.fillRgb.r - imp.fillRgb.r);
+      const dg = Math.abs(d.fillRgb.g - imp.fillRgb.g);
+      const db = Math.abs(d.fillRgb.b - imp.fillRgb.b);
+      const dist = dr + dg + db;
+
+      if (dist > 0.05) {
+        issues.push({
+          category: 'color',
+          severity: dist > 0.3 ? 'critical' : 'major',
+          title: `Icon color mismatch: "${imp.nodeName}"`,
+          description: `Design: ${d.fillHex}, Impl: ${imp.fillHex}`,
+          nodeName: imp.nodeName, nodeId: imp.nodeId,
+          expected: d.fillHex, actual: imp.fillHex,
+          suggestion: `Change icon color to ${d.fillHex}`,
+        });
+      }
+    }
+
+    // Compare icon size
+    const dw = Math.abs(Math.round(d.width) - Math.round(imp.width));
+    const dh = Math.abs(Math.round(d.height) - Math.round(imp.height));
+    if (dw > 0 || dh > 0) {
+      issues.push({
+        category: 'spacing',
+        severity: (dw >= 4 || dh >= 4) ? 'critical' : 'major',
+        title: `Icon size mismatch: "${imp.nodeName}"`,
+        description: `Design: ${Math.round(d.width)}x${Math.round(d.height)}px, Impl: ${Math.round(imp.width)}x${Math.round(imp.height)}px`,
+        nodeName: imp.nodeName, nodeId: imp.nodeId,
+        expected: `${Math.round(d.width)}x${Math.round(d.height)}px`,
+        actual: `${Math.round(imp.width)}x${Math.round(imp.height)}px`,
+        suggestion: `Resize icon to ${Math.round(d.width)}x${Math.round(d.height)}px`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+export function crossCompareSpacing(
+  designSpacing: SpacingPropertyInfo[],
+  implSpacing: SpacingPropertyInfo[]
+): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const count = Math.min(designSpacing.length, implSpacing.length);
+
+  for (let i = 0; i < count; i++) {
+    const d = designSpacing[i];
+    const imp = implSpacing[i];
+
+    // Compare itemSpacing (gap)
+    if (d.itemSpacing !== imp.itemSpacing) {
+      issues.push({
+        category: 'spacing',
+        severity: Math.abs(d.itemSpacing - imp.itemSpacing) >= 4 ? 'critical' : 'major',
+        title: `Gap mismatch: "${imp.nodeName}"`,
+        description: `Design: ${d.itemSpacing}px, Impl: ${imp.itemSpacing}px`,
+        nodeName: imp.nodeName, nodeId: imp.nodeId,
+        expectedValue: d.itemSpacing, actualValue: imp.itemSpacing,
+        suggestion: `Change gap to ${d.itemSpacing}px`,
+      });
+    }
+
+    // Compare paddings
+    const paddings: { dir: string; dv: number; iv: number }[] = [
+      { dir: 'top', dv: d.paddingTop, iv: imp.paddingTop },
+      { dir: 'right', dv: d.paddingRight, iv: imp.paddingRight },
+      { dir: 'bottom', dv: d.paddingBottom, iv: imp.paddingBottom },
+      { dir: 'left', dv: d.paddingLeft, iv: imp.paddingLeft },
+    ];
+
+    for (const p of paddings) {
+      if (p.dv !== p.iv) {
+        issues.push({
+          category: 'spacing',
+          severity: Math.abs(p.dv - p.iv) >= 4 ? 'critical' : 'major',
+          title: `Padding-${p.dir} mismatch: "${imp.nodeName}"`,
+          description: `Design: ${p.dv}px, Impl: ${p.iv}px`,
+          nodeName: imp.nodeName, nodeId: imp.nodeId,
+          expectedValue: p.dv, actualValue: p.iv,
+          suggestion: `Change padding-${p.dir} to ${p.dv}px`,
+        });
+      }
+    }
+  }
+
   return issues;
 }
